@@ -699,13 +699,11 @@ section.${c}>footer { z-index: 1; }
 
 			for (const subStyle of subStyles) {
 				//TODO temporary disable modificators until test it well
-				var selector = `${style.target ?? ''}.${style.cssName}`; //${subStyle.mod ?? ''} 
-
-				if (style.target != subStyle.target)
-					selector += ` ${subStyle.target}`;
+				const subTarget = style.target != subStyle.target ? ` ${subStyle.target}` : '';
+				var selector = `${style.target ?? ''}.${style.cssName}${subTarget}`; //${subStyle.mod ?? ''} 
 
 				if (defautStyles[style.target] == style)
-					selector = `.${this.className} ${style.target}, ` + selector;
+					selector = `.${this.className} ${style.target}${subTarget}, ` + selector;
 
 				styleText += this.styleToString(selector, subStyle.values);
 			}
