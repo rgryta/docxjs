@@ -1497,13 +1497,10 @@ export class DocumentParser {
 		if (after) style["margin-bottom"] = after;
 
 		if (line) {
+			style["--docx-run-line-height"] = lineRule == "atLeast" ? "normal" : "initial";
 			switch (lineRule) {
 				case "auto":
 					style["line-height"] = `${(Number(line) / 240).toFixed(2)}`;
-					break;
-
-				case "atLeast":
-					style["line-height"] = `calc(100% + ${convertLength(line, LengthUsage.Dxa)})`;
 					break;
 
 				default:
