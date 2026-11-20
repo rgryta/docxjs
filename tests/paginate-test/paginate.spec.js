@@ -1,18 +1,3 @@
-describe("Line height", function () {
-  it("sets auto line spacing to the multiple times the font size rounded up to whole pixels", async () => {
-    const docBlob = await fetch(`/base/tests/paginate-test/document.docx`).then(r => r.blob());
-    const div = document.createElement("div");
-    document.body.appendChild(div);
-    await docx.renderAsync(docBlob, div, null, {});
-    const span = div.querySelector("section.docx p:not([class]) span");
-    const size = parseFloat(getComputedStyle(span).fontSize);
-    const multiple = parseFloat(getComputedStyle(span).getPropertyValue("--docx-line"));
-    expect(multiple).toBeGreaterThan(1);
-    expect(parseFloat(getComputedStyle(span).lineHeight)).toBeCloseTo(multiple * Math.ceil(size), 1);
-    div.remove();
-  });
-});
-
 describe("Paginate", function () {
   let div;
 

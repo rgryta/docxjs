@@ -375,9 +375,16 @@ export class HtmlRenderer {
 			?? (page % 2 == 1 && evenAndOddHeaders ? refs.find(x => x.type == "even") : null)
 			?? refs.find(x => x.type == "default");
 
-		var part = ref && this.document.findPartByRelId(ref.id, this.document.documentPart) as BaseHeaderFooterPart;
+		if (ref?.type == "first")
+			into.setAttribute("data-docx-first-page", "");
 
-		if (part) {
+		// The alternates are rendered hidden so paginate can show the one each split page needs.
+		for (const alt of refs.filter(x => x == ref || x.type == "default" || (x.type == "even" && evenAndOddHeaders))) {
+			var part = this.document.findPartByRelId(alt.id, this.document.documentPart) as BaseHeaderFooterPart;
+
+			if (!part)
+				continue;
+
 			this.currentPart = part;
 			if (!this.usedHederFooterParts.includes(part.path)) {
 				this.processElement(part.rootElement);
@@ -395,6 +402,11 @@ export class HtmlRenderer {
 					el.style.minHeight = `calc(${props.pageMargins.bottom} - ${props.pageMargins.footer})`;
 				}
 			}
+
+			el.setAttribute("data-docx-hf", alt.type);
+
+			if (alt != ref)
+				el.style.display = "none";
 
 			this.currentPart = null;
 		}
@@ -532,12 +544,6 @@ section.${c}>footer { z-index: 1; }
 .${c} p { margin: 0pt; min-height: 1em; }
 .${c} p.${c}-continued::before { content: none; }
 .${c} span { white-space: pre-wrap; overflow-wrap: break-word; }
-@supports (line-height: round(up, 1em, 1px)) {
-	/* Word 'auto' line spacing is the multiple times the font size rounded up to whole pixels
-	   (Word for the web: 10pt = 13.33px gives 14px lines at single spacing). Without --docx-line
-	   (exact or at-least spacing) the declaration is invalid and the run inherits its paragraph's. */
-	.${c} p span { line-height: calc(var(--docx-line) * round(up, 1em, 1px)); }
-}
 .${c} a { color: inherit; text-decoration: inherit; }
 .${c} svg { fill: transparent; }
 `;

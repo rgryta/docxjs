@@ -1491,18 +1491,14 @@ export class DocumentParser {
 			switch (lineRule) {
 				case "auto":
 					style["line-height"] = `${(line / 240).toFixed(2)}`;
-					// Multiple for the run rule in the predefined styles (see renderDefaultStyle).
-					style["--docx-line"] = `${(line / 240).toFixed(2)}`;
 					break;
 
 				case "atLeast":
 					style["line-height"] = `calc(100% + ${line / 20}pt)`;
-					style["--docx-line"] = "initial";
 					break;
 
 				default:
 					style["line-height"] = style["min-height"] = `${line / 20}pt`
-					style["--docx-line"] = "initial";
 					break;
 			}
 		}
