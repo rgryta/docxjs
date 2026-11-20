@@ -14,7 +14,8 @@ describe("Render document", function () {
     'equation',
     'page-break-before',
     'vml-path',
-    'shapes'
+    'shapes',
+    'shape-groups'
   ];
 
   for (let path of tests) {
