@@ -3077,7 +3077,7 @@ class DocumentParser {
                     row.className = values.classNameOfCnfStyle(c);
                     break;
                 case "tblHeader":
-                    row.isHeader = globalXmlParser.boolAttr(c, "val");
+                    row.isHeader = globalXmlParser.boolAttr(c, "val", true);
                     break;
                 case "gridBefore":
                     row.gridBefore = globalXmlParser.intAttr(c, "val");
@@ -3267,6 +3267,12 @@ class DocumentParser {
                     if (globalXmlParser.boolAttr(c, "val", true))
                         style["direction"] = "rtl";
                     break;
+                case "keepLines":
+                    style["break-inside"] = globalXmlParser.boolAttr(c, "val", true) ? "avoid" : "auto";
+                    break;
+                case "keepNext":
+                    style["break-after"] = globalXmlParser.boolAttr(c, "val", true) ? "avoid" : "auto";
+                    break;
                 case "bCs":
                 case "iCs":
                 case "szCs":
@@ -3278,8 +3284,6 @@ class DocumentParser {
                 case "webHidden":
                 case "pageBreakBefore":
                 case "suppressLineNumbers":
-                case "keepLines":
-                case "keepNext":
                 case "widowControl":
                 case "noProof":
                     break;
@@ -4071,8 +4075,12 @@ class HtmlRenderer {
         var ref = (props.titlePage && firstOfSection ? refs.find(x => x.type == "first") : null)
             ?? (page % 2 == 1 && evenAndOddHeaders ? refs.find(x => x.type == "even") : null)
             ?? refs.find(x => x.type == "default");
-        var part = ref && this.document.findPartByRelId(ref.id, this.document.documentPart);
-        if (part) {
+        if (ref?.type == "first")
+            into.setAttribute("data-docx-first-page", "");
+        for (const alt of refs.filter(x => x == ref || x.type == "default" || (x.type == "even" && evenAndOddHeaders))) {
+            var part = this.document.findPartByRelId(alt.id, this.document.documentPart);
+            if (!part)
+                continue;
             this.currentPart = part;
             if (!this.usedHederFooterParts.includes(part.path)) {
                 this.processElement(part.rootElement);
@@ -4089,6 +4097,9 @@ class HtmlRenderer {
                     el.style.minHeight = `calc(${props.pageMargins.bottom} - ${props.pageMargins.footer})`;
                 }
             }
+            el.setAttribute("data-docx-hf", alt.type);
+            if (alt != ref)
+                el.style.display = "none";
             this.currentPart = null;
         }
     }
@@ -4200,6 +4211,7 @@ section.${c}>footer { z-index: 1; }
 .${c} table { border-collapse: collapse; }
 .${c} table td, .${c} table th { vertical-align: top; }
 .${c} p { margin: 0pt; min-height: 1em; }
+.${c} p.${c}-continued::before { content: none; }
 .${c} span { white-space: pre-wrap; overflow-wrap: break-word; }
 .${c} a { color: inherit; text-decoration: inherit; }
 .${c} svg { fill: transparent; }
@@ -4443,6 +4455,10 @@ section.${c}>footer { z-index: 1; }
         return this.h({ ns, tagName, children: this.renderElements(elem.children), ...props });
     }
     renderParagraph(elem) {
+        if (elem.keepNext != null)
+            (elem.cssStyle ?? (elem.cssStyle = {}))["break-after"] = elem.keepNext ? "avoid" : "auto";
+        if (elem.keepLines != null)
+            (elem.cssStyle ?? (elem.cssStyle = {}))["break-inside"] = elem.keepLines ? "avoid" : "auto";
         const style = this.findStyle(elem.styleName);
         elem.tabs = mergeTabs(style?.paragraphProps?.tabs, elem.tabs);
         var result = this.toHTML(elem, ns.html, "p");
@@ -4610,7 +4626,13 @@ section.${c}>footer { z-index: 1; }
         const children = [];
         if (elem.columns)
             children.push(this.renderTableColumns(elem.columns));
-        children.push(...this.renderElements(elem.children));
+        const rows = elem.children ?? [];
+        let headerCount = 0;
+        while (headerCount < rows.length && rows[headerCount].isHeader)
+            headerCount++;
+        if (headerCount > 0)
+            children.push(this.h({ ns: ns.html, tagName: "thead", children: this.renderElements(rows.slice(0, headerCount)) }));
+        children.push(...this.renderElements(rows.slice(headerCount)));
         this.currentVerticalMerge = this.tableVerticalMerges.pop();
         this.currentCellPosition = this.tableCellPositions.pop();
         return this.toHTML(elem, ns.html, "table", children);
@@ -5135,6 +5157,250 @@ function staticOffset(axis, frames) {
     return !hasOwn(frames, axis.relative) && axis.offset != null ? pt(axis.offset) : null;
 }
 
+const MAX_PAGES = 2000;
+const MIN_SPLIT_HEIGHT = 24;
+function paginate(root, className = "docx", options) {
+    const deadline = options?.budgetMs === undefined ? Infinity : performance.now() + options.budgetMs;
+    const pages = Array.from(root.querySelectorAll(`section.${className}`));
+    let done = true;
+    for (let i = 0; i < pages.length; i++) {
+        if (pages.length >= MAX_PAGES || performance.now() >= deadline) {
+            done = false;
+            break;
+        }
+        showHeaderFooter(pages[i], i);
+        const next = splitPage(pages[i], className);
+        if (next)
+            pages.splice(i + 1, 0, next);
+    }
+    pages.forEach(showHeaderFooter);
+    return done;
+}
+function splitPage(page, className = "docx") {
+    const children = Array.from(page.children);
+    const articles = children.filter(c => c.tagName === "ARTICLE");
+    if (!articles.length)
+        return null;
+    const style = getComputedStyle(page);
+    const pageHeight = parseFloat(style.minHeight);
+    if (!pageHeight)
+        return null;
+    const footer = children.find(c => c.tagName === "FOOTER" && getComputedStyle(c).display !== "none");
+    const below = footer ? outerHeight(footer) : 0;
+    const limitY = page.getBoundingClientRect().top + pageHeight - (parseFloat(style.paddingBottom) || 0) - below + 0.5;
+    if (limitY - articles[0].getBoundingClientRect().top < MIN_SPLIT_HEIGHT)
+        return null;
+    const flow = [
+        ...articles.flatMap(article => Array.from(article.children).map(block => ({ block, article }))),
+        ...children.filter(c => c.tagName === "OL").map(block => ({ block, article: null })),
+    ];
+    const over = flow.findIndex(f => !isBlank(f.block) && f.block.getBoundingClientRect().bottom > limitY);
+    if (over < 0) {
+        for (const f of flow) {
+            if (f.article && isBlank(f.block) && f.block.getBoundingClientRect().bottom > limitY)
+                f.block.style.display = "none";
+        }
+        return null;
+    }
+    const overArticle = flow[over].article;
+    let cut = over;
+    let carry = null;
+    if (flow[over].block.tagName === "TABLE")
+        carry = splitTable(flow[over].block, limitY);
+    else if (flow[over].block.tagName === "P")
+        carry = splitParagraph(flow[over].block, limitY, className);
+    if (carry) {
+        cut = over + 1;
+    }
+    else {
+        while (cut > 0 && flow[cut - 1].article === overArticle && overArticle && getComputedStyle(flow[cut - 1].block).breakAfter === "avoid")
+            cut--;
+        if (cut === 0)
+            cut = over || 1;
+        if (cut >= flow.length)
+            return null;
+    }
+    const moved = new Map();
+    const notes = [];
+    if (carry)
+        moved.set(overArticle, [carry]);
+    for (const f of flow.slice(cut)) {
+        if (f.article)
+            moved.set(f.article, [...(moved.get(f.article) ?? []), f.block]);
+        else
+            notes.push(f.block);
+    }
+    const next = page.cloneNode(false);
+    next.removeAttribute("data-docx-first-page");
+    for (const c of children) {
+        if (c.tagName === "HEADER" && c.dataset.docxHf !== "first")
+            next.appendChild(c.cloneNode(true));
+    }
+    for (const [article, blocks] of moved) {
+        if (article !== overArticle || !carry && blocks[0] === article.firstElementChild) {
+            next.appendChild(article);
+        }
+        else {
+            const rest = article.cloneNode(false);
+            rest.append(...blocks);
+            next.appendChild(rest);
+        }
+    }
+    next.append(...notes);
+    for (const c of children) {
+        if (c.tagName === "FOOTER" && c.dataset.docxHf !== "first")
+            next.appendChild(c.cloneNode(true));
+    }
+    page.after(next);
+    return next;
+}
+function showHeaderFooter(page, index) {
+    for (const tag of ["HEADER", "FOOTER"]) {
+        const alternates = Array.from(page.children).filter(c => c.tagName === tag && c.dataset.docxHf);
+        const find = (type) => alternates.find(c => c.dataset.docxHf === type);
+        const pick = (page.hasAttribute("data-docx-first-page") ? find("first") : null)
+            ?? (index % 2 == 1 ? find("even") : null)
+            ?? find("default");
+        for (const c of alternates) {
+            if ((c === pick) === (c.style.display === "none"))
+                c.style.display = c === pick ? "" : "none";
+        }
+    }
+}
+function outerHeight(el) {
+    const style = getComputedStyle(el);
+    return el.getBoundingClientRect().height + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
+}
+function splitTable(table, limitY) {
+    const head = table.tHead;
+    const rows = Array.from(table.rows).filter(r => r.parentElement !== head);
+    const at = rows.findIndex(r => r.getBoundingClientRect().bottom > limitY);
+    if (at <= 0)
+        return null;
+    const rest = table.cloneNode(false);
+    for (const c of Array.from(table.children)) {
+        if (c.tagName === "COLGROUP") {
+            rest.appendChild(c.cloneNode(true));
+        }
+        else if (c === head) {
+            const copy = head.cloneNode(true);
+            copy.setAttribute("data-docx-repeat", "");
+            clampRowSpans(Array.from(copy.rows), copy.rows.length);
+            rest.appendChild(copy);
+        }
+    }
+    const first = rows[at];
+    for (const { row, cell, column, span } of clampRowSpans(rows.slice(0, at), at)) {
+        const continued = cellAtColumn(first, column);
+        if (continued?.style.display === "none") {
+            continued.style.cssText = cell.style.cssText;
+            continued.rowSpan = span - (at - row);
+        }
+    }
+    for (const r of rows.slice(at))
+        rest.appendChild(r);
+    return rest;
+}
+function splitParagraph(p, limitY, className = "docx") {
+    if (getComputedStyle(p).breakInside === "avoid")
+        return null;
+    const lines = paragraphLines(p);
+    let keep = lines.filter(l => l.bottom <= limitY).length;
+    if (lines.length - keep < 2)
+        keep = lines.length - 2;
+    if (keep < 2)
+        return null;
+    const at = textPositionAt(p, lines[keep].top - 1);
+    if (!at)
+        return null;
+    const range = document.createRange();
+    range.setStart(at.node, at.offset);
+    range.setEnd(p, p.childNodes.length);
+    const rest = p.cloneNode(false);
+    rest.removeAttribute("id");
+    rest.appendChild(range.extractContents());
+    p.style.marginBottom = "0";
+    rest.style.marginTop = "0";
+    rest.style.textIndent = "0";
+    rest.classList.add(`${className}-continued`);
+    p.after(rest);
+    return rest;
+}
+function clampRowSpans(rows, end) {
+    const clamped = [];
+    rows.forEach((row, i) => {
+        let column = 0;
+        for (const cell of Array.from(row.cells)) {
+            if (cell.style.display !== "none" && i + cell.rowSpan > end) {
+                clamped.push({ row: i, cell, column, span: cell.rowSpan });
+                cell.rowSpan = end - i;
+            }
+            column += cell.colSpan;
+        }
+    });
+    return clamped;
+}
+function cellAtColumn(row, column) {
+    let at = 0;
+    for (const cell of Array.from(row.cells)) {
+        if (at === column)
+            return cell;
+        at += cell.colSpan;
+    }
+    return null;
+}
+function paragraphLines(p) {
+    const range = document.createRange();
+    const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+    const rects = [];
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        range.selectNodeContents(n);
+        rects.push(...Array.from(range.getClientRects()));
+    }
+    const lines = [];
+    for (const r of rects) {
+        if (!r.width && !r.height)
+            continue;
+        const line = lines.find(l => Math.abs(l.top - r.top) < 2 || (r.top < l.bottom - 2 && r.bottom > l.top + 2));
+        if (line) {
+            line.top = Math.min(line.top, r.top);
+            line.bottom = Math.max(line.bottom, r.bottom);
+        }
+        else {
+            lines.push({ top: r.top, bottom: r.bottom });
+        }
+    }
+    return lines.sort((a, b) => a.top - b.top);
+}
+function textPositionAt(p, y) {
+    const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    const topOf = (node, offset) => {
+        range.setStart(node, offset);
+        range.setEnd(node, offset + 1);
+        const rects = range.getClientRects();
+        return rects.length ? rects[0].top : -Infinity;
+    };
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        if (!n.length || topOf(n, n.length - 1) < y)
+            continue;
+        let lo = 0;
+        let hi = n.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (topOf(n, mid) >= y)
+                hi = mid;
+            else
+                lo = mid + 1;
+        }
+        return { node: n, offset: lo };
+    }
+    return null;
+}
+function isBlank(el) {
+    return !el.textContent.trim() && !el.querySelector("img, svg, table, canvas, image, div");
+}
+
 const defaultOptions = {
     ignoreHeight: false,
     ignoreWidth: false,
@@ -5155,6 +5421,7 @@ const defaultOptions = {
     renderChanges: false,
     renderComments: false,
     renderAltChunks: true,
+    paginate: false,
     h: h
 };
 function parseAsync(data, userOptions) {
@@ -5176,8 +5443,13 @@ async function renderAsync(data, bodyContainer, styleContainer, userOptions) {
         const c = n.nodeName === "STYLE" ? styleContainer : bodyContainer;
         c.appendChild(n);
     }
+    const ops = { ...defaultOptions, ...userOptions };
+    if (ops.paginate && bodyContainer.isConnected) {
+        await document.fonts?.ready;
+        paginate(bodyContainer, ops.className);
+    }
     return doc;
 }
 
-export { defaultOptions, parseAsync, remeasureTabStops, renderAsync, renderDocument };
+export { defaultOptions, paginate, parseAsync, remeasureTabStops, renderAsync, renderDocument };
 //# sourceMappingURL=docx-preview.mjs.map
