@@ -13,7 +13,8 @@ describe("Render document", function () {
     'footnote',
     'equation',
     'page-break-before',
-    'vml-path'
+    'vml-path',
+    'shapes'
   ];
 
   for (let path of tests) {

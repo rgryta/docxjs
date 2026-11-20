@@ -10,7 +10,7 @@ import {
 import { Options } from './docx-preview';
 import { DocumentElement } from './document/document';
 import { WmlParagraph } from './document/paragraph';
-import { asArray, encloseFontFamily, escapeClassName, isString, keyBy, mergeDeep } from './utils';
+import { asArray, clamp, encloseFontFamily, escapeClassName, isString, keyBy, mergeDeep } from './utils';
 import { computePixelToPoint, updateTabStop } from './javascript';
 import { FontTablePart } from './font-table/font-table';
 import { FooterHeaderReference, SectionProperties } from './document/section';
@@ -21,7 +21,8 @@ import { WmlBaseNote, WmlFootnote } from './notes/elements';
 import { ThemePart } from './theme/theme-part';
 import { BaseHeaderFooterPart, FooterPart } from './header-footer/parts';
 import { Part } from './common/part';
-import { formatNumber, VmlElement } from './vml/vml';
+import { dashPatterns, formatNumber, paintAttrs, VmlElement, VmlSvgPart, VmlTextBox } from './vml/vml';
+import { DmlAnchor, DmlAxis, DmlColor, DmlDrawing, DmlShape, DmlStyleRef, formatColor, ResolvedColor, resolveColor } from './drawing/shape';
 import { WmlCommentRangeStart, WmlCommentReference } from './comments/elements';
 import { cx, h, ns } from './html';
 
@@ -41,6 +42,41 @@ declare const Highlight: any;
 type CellVerticalMergeType = Record<number, HTMLTableCellElement>;
 
 const pageVariableNames = ["--docx-page-width", "--docx-page-height", "--docx-margin-left", "--docx-margin-right", "--docx-margin-top", "--docx-margin-bottom"] as const;
+
+interface ShapeContent {
+	parts: VmlSvgPart[];
+	viewBox?: string;
+	flip?: string;
+	textBox?: VmlTextBox;
+	children?: OpenXmlElement[];
+	imageHref?: { id: string };
+}
+
+const pageWidth = "var(--docx-page-width, 100%)";
+const pageHeight = "var(--docx-page-height, 100%)";
+const marginLeft = "var(--docx-margin-left, 0pt)";
+const marginRight = "var(--docx-margin-right, 0pt)";
+const marginTop = "var(--docx-margin-top, 0pt)";
+const marginBottom = "var(--docx-margin-bottom, 0pt)";
+const textColumn: [string, string] = [marginLeft, `(${pageWidth} - ${marginLeft} - ${marginRight})`];
+
+const horizontalFrames: Record<string, [string, string]> = {
+	page: ["0pt", pageWidth],
+	margin: textColumn,
+	column: textColumn,
+	leftMargin: ["0pt", marginLeft],
+	rightMargin: [`(${pageWidth} - ${marginRight})`, marginRight],
+};
+
+const verticalFrames: Record<string, [string, string]> = {
+	page: ["0pt", pageHeight],
+	margin: [marginTop, `(${pageHeight} - ${marginTop} - ${marginBottom})`],
+	topMargin: ["0pt", marginTop],
+	bottomMargin: [`(${pageHeight} - ${marginBottom})`, marginBottom],
+};
+
+const hasOwn = (record: object, key: string) => key != null && Object.prototype.hasOwnProperty.call(record, key);
+const pt = (value: number) => `${formatNumber(value)}pt`;
 
 export class HtmlRenderer {
 
@@ -1029,6 +1065,9 @@ section.${c}>footer { z-index: 1; }
 	}
 
 	renderDrawing(elem: OpenXmlElement) {
+		if ((elem as DmlDrawing).anchor)
+			return this.renderShapeDrawing(elem as DmlDrawing);
+
 		var result = this.toHTML(elem, ns.html, "div");
 
 		result.style.display = "inline-block";
@@ -1226,48 +1265,8 @@ section.${c}>footer { z-index: 1; }
 		const box = this.h({ tagName: "span" }) as HTMLElement;
 		this.placeVmlBox(elem, box.style);
 
-		const svg = this.createSvgElement("svg");
 		const sizeless = !!elem.imageHref && elem.box.width == null && elem.box.height == null;
-
-		if (!sizeless) {
-			for (const [key, value] of [["position", "absolute"], ["inset", "0"], ["width", "100%"], ["height", "100%"], ["overflow", "visible"]])
-				svg.style.setProperty(key, value);
-		}
-
-		if (elem.viewBox) {
-			svg.setAttribute("viewBox", elem.viewBox);
-			svg.setAttribute("preserveAspectRatio", "none");
-		}
-
-		if (elem.flip)
-			svg.style.setProperty("transform", elem.flip);
-
-		for (const part of elem.parts) {
-			const node = this.createSvgElement(part.tagName);
-			Object.entries(part.attrs).forEach(([k, v]) => node.setAttribute(k, v));
-
-			if (part.tagName == "image" && elem.imageHref?.id) {
-				this.tasks.push(this.document?.loadDocumentImage(elem.imageHref.id, this.currentPart)
-					.then(x => node.setAttribute("href", x)));
-			}
-
-			svg.appendChild(node);
-		}
-
-		box.appendChild(svg);
-
-		if (elem.textBox) {
-			const text = this.h({ tagName: "div" }) as HTMLElement;
-			const [top, right, bottom, left] = elem.textBox.padding;
-			const textStyle = {
-				"position": "relative", "min-height": "100%", "box-sizing": "border-box",
-				"padding-top": top, "padding-right": right, "padding-bottom": bottom, "padding-left": left,
-				"display": "flex", "flex-direction": "column", "justify-content": elem.textBox.justify,
-			};
-			Object.entries(textStyle).forEach(([k, v]) => text.style.setProperty(k, v));
-			this.renderElements(elem.children, text);
-			box.appendChild(text);
-		}
+		const svg = this.renderShape(box, elem, !sizeless);
 
 		if (sizeless) {
 			requestAnimationFrame(() => {
@@ -1284,9 +1283,178 @@ section.${c}>footer { z-index: 1; }
 		return box;
 	}
 
+	renderShape(box: HTMLElement, shape: ShapeContent, fitted: boolean, textColor: string = null): SVGSVGElement {
+		box.style.setProperty("pointer-events", "none");
+
+		const svg = this.createSvgElement("svg");
+
+		if (fitted) {
+			for (const [key, value] of [["position", "absolute"], ["inset", "0"], ["width", "100%"], ["height", "100%"], ["overflow", "visible"]])
+				svg.style.setProperty(key, value);
+		}
+
+		if (shape.viewBox) {
+			svg.setAttribute("viewBox", shape.viewBox);
+			svg.setAttribute("preserveAspectRatio", "none");
+		}
+
+		if (shape.flip)
+			svg.style.setProperty("transform", shape.flip);
+
+		for (const part of shape.parts) {
+			const node = this.createSvgElement(part.tagName);
+			Object.entries(part.attrs).forEach(([k, v]) => node.setAttribute(k, v));
+
+			if (part.tagName == "image" && shape.imageHref?.id) {
+				this.tasks.push(this.document?.loadDocumentImage(shape.imageHref.id, this.currentPart)
+					.then(x => node.setAttribute("href", x)));
+			}
+
+			svg.appendChild(node);
+		}
+
+		box.appendChild(svg);
+
+		if (shape.textBox) {
+			const text = this.h({ tagName: "div" }) as HTMLElement;
+			const [top, right, bottom, left] = shape.textBox.padding;
+			const textStyle = {
+				"position": "relative", "min-height": "100%", "box-sizing": "border-box",
+				"padding-top": top, "padding-right": right, "padding-bottom": bottom, "padding-left": left,
+				"display": "flex", "flex-direction": "column", "justify-content": shape.textBox.justify,
+				"pointer-events": "auto",
+			};
+			Object.entries(textStyle).forEach(([k, v]) => text.style.setProperty(k, v));
+
+			if (textColor)
+				text.style.setProperty("color", textColor);
+
+			this.renderElements(shape.children, text);
+			box.appendChild(text);
+		}
+
+		return svg;
+	}
+
+	renderShapeDrawing(elem: DmlDrawing): HTMLElement {
+		const shape = elem.children[0] as DmlShape;
+		const width = Math.max(0, shape.width ?? elem.anchor.width ?? 0);
+		const height = Math.max(0, shape.height ?? elem.anchor.height ?? 0);
+
+		if (shape.geometry != "line" && !(width > 0 && height > 0))
+			return null;
+
+		const theme = this.document?.themePart?.theme;
+		let partial = false;
+
+		const resolve = (spec: DmlColor | null | undefined, ref: DmlStyleRef): ResolvedColor => {
+			const refColor = ref?.color ? resolveColor(ref.color, theme) : null;
+			const fromRef = spec === undefined && ref?.idx > 0 && !!ref.color;
+
+			if (spec === null || spec === undefined && !fromRef)
+				return null;
+
+			const color = fromRef ? refColor : resolveColor(spec, theme, refColor);
+			partial ||= !color;
+			return color;
+		};
+
+		const fill = resolve(shape.fill, shape.fillRef);
+		const stroke = resolve(shape.line.fill, shape.lnRef);
+		const text = shape.textBox && shape.fontRef?.color ? resolve(shape.fontRef.color, null) : null;
+		const themeWidth = shape.lnRef?.idx > 0 ? theme?.lineWidths[shape.lnRef.idx - 1] : null;
+		const dashName = shape.line.dash?.toLowerCase().replace(/^lg/, "long").replace(/^sys/, "short");
+		const paint = {
+			fill: fill && formatColor(fill),
+			stroke: stroke && formatColor(stroke),
+			strokeWidth: clamp(shape.line.width ?? (themeWidth != null ? themeWidth / 12700 : 0.75), 0.25, 12),
+			dash: hasOwn(dashPatterns, dashName) ? dashPatterns[dashName] : undefined,
+		};
+
+		const attrs = (filled: boolean) => {
+			const result = paintAttrs(paint, filled, true);
+			if (filled && fill?.alpha < 1) result["fill-opacity"] = formatNumber(fill.alpha);
+			if (stroke?.alpha < 1) result["stroke-opacity"] = formatNumber(stroke.alpha);
+			return result;
+		};
+
+		const radius = pt(shape.radius * Math.min(width, height));
+		const parts: VmlSvgPart[] = [
+			shape.geometry == "ellipse" ? { tagName: "ellipse", attrs: { cx: "50%", cy: "50%", rx: "50%", ry: "50%", ...attrs(true) } }
+				: shape.geometry == "line" ? { tagName: "line", attrs: { x1: "0", y1: "0", x2: "100%", y2: "100%", ...attrs(false) } }
+				: { tagName: "rect", attrs: { width: "100%", height: "100%", ...(shape.geometry == "roundRect" ? { rx: radius, ry: radius } : {}), ...attrs(true) } }
+		];
+
+		if (partial)
+			parts.push({ tagName: "g", attrs: { "data-docx-not-drawn": "partial" } });
+
+		const wrapper = this.h({ tagName: "div" }) as HTMLElement;
+		this.placeShapeWrapper(elem.anchor, shape.autoFit, wrapper.style, elem.anchor.width ?? width, elem.anchor.height ?? height);
+
+		const box = this.h({ tagName: "span" }) as HTMLElement;
+		const set = (key: string, value: string) => box.style.setProperty(key, value);
+
+		set("display", "block");
+		set("position", "relative");
+		set("width", pt(width));
+		set(shape.autoFit ? "min-height" : "height", pt(height));
+		if (!(width >= 0.75)) set("min-width", "1px");
+		if (!(height >= 0.75)) set("min-height", "1px");
+		if (shape.rotation) set("transform", `rotate(${formatNumber(shape.rotation)}deg)`);
+
+		const flip = shape.flipH || shape.flipV ? `scale(${shape.flipH ? -1 : 1}, ${shape.flipV ? -1 : 1})` : undefined;
+		this.renderShape(box, { parts, flip, textBox: shape.textBox, children: shape.children }, true, text && formatColor(text));
+		wrapper.appendChild(box);
+
+		return wrapper;
+	}
+
+	placeShapeWrapper(anchor: DmlAnchor, autoFit: boolean, style: CSSStyleDeclaration, width: number, height: number) {
+		const set = (key: string, value: string) => style.setProperty(key, value);
+		const floating = !anchor.inline && !anchor.nested;
+		const placed = floating && anchor.wrap == "wrapNone";
+
+		set("display", floating && !placed ? "block" : "inline-block");
+		set("position", placed ? "absolute" : "relative");
+		set("width", pt(width));
+		set(autoFit ? "min-height" : "height", pt(height));
+		set("text-indent", "0px");
+		set("pointer-events", "none");
+
+		if (anchor.behindDoc)
+			set("z-index", "-1");
+
+		if (!floating)
+			return;
+
+		const left = anchorEdge(anchor.h, horizontalFrames, width);
+		const hStatic = staticOffset(anchor.h, horizontalFrames);
+
+		if (placed && left != null)
+			set("left", left);
+		else if (left != null)
+			set("margin-left", `calc(${left} - ${marginLeft})`);
+		else if (hStatic)
+			set("margin-left", hStatic);
+
+		if (!placed) {
+			if (anchor.v.offset != null) set("margin-top", pt(anchor.v.offset));
+			return;
+		}
+
+		const top = anchorEdge(anchor.v, verticalFrames, height);
+		const vStatic = staticOffset(anchor.v, verticalFrames);
+
+		if (top == null && vStatic)
+			set("margin-top", vStatic);
+		else if (top != null && this.currentPart instanceof FooterPart)
+			set("bottom", `calc(${pageHeight} - ${top} - ${pt(height)})`);
+		else if (top != null)
+			set("top", top);
+	}
+
 	placeVmlBox(elem: VmlElement, style: CSSStyleDeclaration) {
 		const box = elem.box;
-		const pt = (value: number) => `${formatNumber(value)}pt`;
 		const set = (key: string, value: string) => style.setProperty(key, value);
 
 		set("display", "inline-block");
@@ -1580,3 +1748,27 @@ function findParent<T extends OpenXmlElement>(elem: OpenXmlElement, type: DomTyp
 	return <T>parent;
 }
 
+
+function anchorEdge(axis: DmlAxis, frames: Record<string, [string, string]>, extent: number): string {
+	if (!hasOwn(frames, axis.relative))
+		return null;
+
+	const [base, span] = frames[axis.relative];
+
+	if (axis.offset !== undefined)
+		return axis.offset == null ? null : `calc(${base} + ${pt(axis.offset)})`;
+
+	switch (axis.align) {
+		case "left":
+		case "top": return `calc(${base})`;
+		case "center": return `calc(${base} + (${span} - ${pt(extent)}) / 2)`;
+		case "right":
+		case "bottom": return `calc(${base} + ${span} - ${pt(extent)})`;
+	}
+
+	return null;
+}
+
+function staticOffset(axis: DmlAxis, frames: Record<string, [string, string]>): string {
+	return !hasOwn(frames, axis.relative) && axis.offset != null ? pt(axis.offset) : null;
+}
