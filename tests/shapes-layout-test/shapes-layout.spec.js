@@ -245,13 +245,11 @@ ${body}
     expect(rect(shapeBox("case-autofit")).height).toBeGreaterThan(13.4);
   });
 
-  it("keeps the picture wrapper as before", () => {
+  it("places a no-wrap picture like a shape and keeps the square-wrap picture floated", () => {
     const none = wrapperOf("case-pic-none");
-    expect(none.style.display).toBe("inline-block");
-    expect(none.style.position).toBe("relative");
+    expect(none.style.position).toBe("absolute");
     expect(none.style.cssFloat).toBe("");
-    expect(px(getComputedStyle(none).width)).toBe(0);
-    expectNear(px(getComputedStyle(none).left), 96);
+    expectNear(rect(none).left - rect(section()).left, 96);
 
     const square = wrapperOf("case-pic-square");
     expect(square.style.cssFloat).toBe("left");
@@ -259,8 +257,8 @@ ${body}
     expectNear(px(getComputedStyle(square).width), 80 / 3);
 
     const behind = wrapperOf("case-pic-behind");
-    expect(behind.style.zIndex).toBe("");
-    expect(px(getComputedStyle(behind).width)).toBe(0);
+    expect(behind.style.zIndex).toBe("-1");
+    expectNear(px(getComputedStyle(behind).width), 80 / 3);
   });
 
   it("takes the shape Choice only when it requires the shape namespace and every drawing in it draws", () => {
