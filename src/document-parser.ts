@@ -1497,15 +1497,13 @@ export class DocumentParser {
 		if (after) style["margin-bottom"] = after;
 
 		if (line) {
+			style["--docx-run-line-height"] = lineRule == "atLeast" ? "normal" : "initial";
 			if (lineRule == "auto") {
 				style["line-height"] = `${(parseInt(line) / 240).toFixed(2)}`;
 			} else {
 				const length = /(mm|cm|in|pc|pi|pt)$/.test(line) ? convertLength(line, LengthUsage.Dxa) : `${parseInt(line) / 20}pt`;
 
-				if (lineRule == "atLeast")
-					style["line-height"] = `calc(100% + ${length})`;
-				else
-					style["line-height"] = style["min-height"] = length;
+				style["line-height"] = style["min-height"] = length;
 			}
 		}
 	}
