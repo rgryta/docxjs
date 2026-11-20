@@ -1,12 +1,4 @@
 (() => {
-  // Chrome writes an atLeast line back in px (36pt becomes 48px), so compare the length.
-  function extraLinePoints(element) {
-      const match = /calc\(100% \+ ([\d.]+)(pt|px)\)/.exec(element.style.lineHeight);
-      if (!match) return NaN;
-      const value = parseFloat(match[1]);
-      return match[2] === "px" ? value * 0.75 : value;
-  }
-
   describe("universal measure lengths", function () {
     const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
     const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -112,7 +104,7 @@
     });
 
     it("converts a unit line for an atLeast rule", () => {
-      expect(extraLinePoints(paragraph("line-0.5in-atLeast"))).toBeCloseTo(36, 2);
+      expect(points(paragraph("line-0.5in-atLeast").style.lineHeight)).toBeCloseTo(36, 2);
     });
 
     it("treats a line without lineRule as auto", () => {
@@ -125,11 +117,11 @@
       expect(paragraph("ind-12pt").style.getPropertyValue("margin-inline-start")).toBe("12pt");
     });
 
-    it("keeps unitless exact and atLeast lines unchanged", () => {
+    it("interprets unitless exact and atLeast lines as twips", () => {
       const exact = paragraph("line-240-exact");
       expect(exact.style.lineHeight).toBe("12pt");
       expect(exact.style.minHeight).toBe("12pt");
-      expect(extraLinePoints(paragraph("line-360-atLeast"))).toBeCloseTo(18, 2);
+      expect(points(paragraph("line-360-atLeast").style.lineHeight)).toBeCloseTo(18, 2);
     });
   });
 })();
