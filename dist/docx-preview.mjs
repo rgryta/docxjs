@@ -4110,6 +4110,14 @@ class HtmlRenderer {
             return !this.options.ignoreLastRenderedPageBreak;
         return elem.break == "page";
     }
+    containsPageBreak(elem) {
+        if (elem.type == DomType.Drawing || elem.type == DomType.VmlElement || elem.type == DomType.VmlPicture)
+            return false;
+        return elem.children?.some(c => this.isPageBreakElement(c) || this.containsPageBreak(c)) ?? false;
+    }
+    containsText(elems) {
+        return elems.some(e => (e.type == DomType.Text && e.text) || this.containsText(e.children ?? []));
+    }
     isPageBreakSection(prev, next) {
         if (!prev)
             return false;
@@ -4133,6 +4141,29 @@ class HtmlRenderer {
                     result.push(current);
                 }
             }
+            if (elem.type == DomType.Table && this.options.breakPages) {
+                const rows = elem.children;
+                const headerCount = rows.findIndex(r => !r.isHeader);
+                const headers = headerCount > 0 ? rows.slice(0, headerCount) : [];
+                const firstRows = Math.max(headerCount, 1);
+                let start = 0;
+                if (current.elements.length > 0 && rows.slice(0, firstRows).some(r => this.containsPageBreak(r))) {
+                    current.pageBreak = true;
+                    current = { sectProps: null, elements: [], pageBreak: false };
+                    result.push(current);
+                }
+                for (let i = firstRows; i < rows.length; i++) {
+                    if (!this.containsPageBreak(rows[i]))
+                        continue;
+                    current.elements.push({ ...elem, children: [...(start ? headers : []), ...rows.slice(start, i)] });
+                    current.pageBreak = true;
+                    current = { sectProps: null, elements: [], pageBreak: false };
+                    result.push(current);
+                    start = i;
+                }
+                if (start > 0)
+                    elem = { ...elem, children: [...headers, ...rows.slice(start)] };
+            }
             current.elements.push(elem);
             if (elem.type == DomType.Paragraph) {
                 const p = elem;
@@ -4140,8 +4171,11 @@ class HtmlRenderer {
                 var pBreakIndex = -1;
                 var rBreakIndex = -1;
                 if (this.options.breakPages && p.children) {
-                    pBreakIndex = p.children.findIndex(r => {
-                        rBreakIndex = r.children?.findIndex(this.isPageBreakElement.bind(this)) ?? -1;
+                    const pageStart = current.elements.length == 1 && result.length > 1 && result[result.length - 2].pageBreak;
+                    pBreakIndex = p.children.findIndex((r, ri) => {
+                        rBreakIndex = r.children?.findIndex((c, ci) => this.isPageBreakElement(c)
+                            && !(pageStart && c.break == "lastRenderedPageBreak"
+                                && !this.containsText(p.children.slice(0, ri)) && !this.containsText(r.children.slice(0, ci)))) ?? -1;
                         return rBreakIndex != -1;
                     });
                 }
