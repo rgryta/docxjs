@@ -13,9 +13,10 @@ import { WmlParagraph } from './document/paragraph';
 import { asArray, encloseFontFamily, escapeClassName, isString, keyBy, mergeDeep } from './utils';
 import { computePixelToPoint, updateTabStop } from './javascript';
 import { FontTablePart } from './font-table/font-table';
-import { FooterHeaderReference, SectionProperties } from './document/section';
+import { FooterHeaderReference, SectionProperties, SectionType } from './document/section';
 import { WmlRun } from './document/run';
 import { WmlBookmarkStart } from './document/bookmarks';
+import { WmlFieldResult } from './document/fields';
 import { IDomStyle } from './document/style';
 import { WmlBaseNote, WmlFootnote } from './notes/elements';
 import { ThemePart } from './theme/theme-part';
@@ -336,6 +337,13 @@ export class HtmlRenderer {
 			const section = pages[i][0];
 			let props = section.sectProps;
 			const pageElement = this.createPageElement(this.className, props, document.cssStyle);
+			const pageNumber = props?.pageNumber;
+
+			if (pageNumber?.start != null && prevProps != props && props.type != SectionType.Continuous && props.type != SectionType.NextColumn)
+				pageElement.setAttribute("data-page-start", String(pageNumber.start));
+
+			if (pageNumber?.chapStyle || pageNumber?.format && pageNumber.format != "decimal")
+				pageElement.setAttribute("data-page-format", "other");
 
 			this.options.renderHeaders && this.renderHeaderFooter(props.headerRefs, props,
 				result.length, prevProps != props, pageElement);
@@ -431,6 +439,12 @@ export class HtmlRenderer {
 			|| prev.pageSize?.height != next.pageSize?.height;
 	}
 
+	// Word's lastRenderedPageBreak hints mark where sections start; without them the section type decides.
+	isNewPageSection(prev: SectionProperties, next: SectionProperties): boolean {
+		return this.options.ignoreLastRenderedPageBreak && prev !== next
+			&& (!next?.type || next.type == SectionType.NextPage || next.type == SectionType.EvenPage || next.type == SectionType.OddPage);
+	}
+
 	splitBySection(elements: OpenXmlElement[], defaultProps: SectionProperties): Section[] {
 		var current: Section = { sectProps: null, elements: [], pageBreak: false };
 		var result = [current];
@@ -505,18 +519,24 @@ export class HtmlRenderer {
 		return result;
 	}
 
+	/** Groups the pieces into pages; each boundary between non-empty pieces ends at most one page, and empty pieces never start one. */
 	groupByPageBreaks(sections: Section[]): Section[][] {
-		let current = [];
-		let prev: SectionProperties;
+		let current: Section[] = [];
+		let prev: Section = null;
+		let pageBreak = false;
 		const result: Section[][] = [current];
 
 		for (let s of sections) {
+			if (s.elements.length) {
+				if (prev && (pageBreak || this.isPageBreakSection(prev.sectProps, s.sectProps) || this.isNewPageSection(prev.sectProps, s.sectProps)))
+					result.push(current = []);
+
+				prev = s;
+				pageBreak = false;
+			}
+
 			current.push(s);
-
-			if (this.options.ignoreLastRenderedPageBreak || s.pageBreak || this.isPageBreakSection(prev, s.sectProps))
-				result.push(current = []);
-
-			prev = s.sectProps;
+			pageBreak ||= s.pageBreak;
 		}
 
 		return result.filter(x => x.length > 0);
@@ -751,6 +771,9 @@ section.${c}>footer { z-index: 1; }
 
 			case DomType.Run:
 				return this.renderRun(elem as WmlRun);
+
+			case DomType.FieldResult:
+				return this.renderFieldResult(elem as WmlFieldResult);
 
 			case DomType.Table:
 				return this.renderTable(elem);
@@ -1123,6 +1146,12 @@ section.${c}>footer { z-index: 1; }
 
 	renderBookmarkStart(elem: WmlBookmarkStart) {
 		return this.h({ tagName: "span", id: elem.name });
+	}
+
+	renderFieldResult(elem: WmlFieldResult) {
+		const result = this.h({ tagName: "span", children: this.renderElements(elem.children) }) as HTMLElement;
+		result.setAttribute("data-docx-field", elem.field);
+		return result;
 	}
 
 	renderRun(elem: WmlRun) {
