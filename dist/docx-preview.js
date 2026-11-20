@@ -1049,7 +1049,7 @@
                     result.endnoteProps = parseNoteProperties(el, xml);
                     break;
                 case "autoHyphenation":
-                    result.autoHyphenation = xml.boolAttr(el, "val");
+                    result.autoHyphenation = xml.boolAttr(el, "val", true);
                     break;
                 case "evenAndOddHeaders":
                     result.evenAndOddHeaders = xml.boolAttr(el, "val", true);
@@ -3265,7 +3265,7 @@
                             style["overflow-wrap"] = "break-word";
                         break;
                     case "suppressAutoHyphens":
-                        style["hyphens"] = globalXmlParser.boolAttr(c, "val", true) ? "none" : "auto";
+                        style["hyphens"] = globalXmlParser.boolAttr(c, "val", true) ? "none" : "inherit";
                         break;
                     case "lang":
                         style["$lang"] = globalXmlParser.attr(c, "val");
@@ -4311,7 +4311,7 @@
                 wrapperStyle = `@media not print { ${wrapperStyle} }`;
             }
             var styleText = `${wrapperStyle}
-.${c} { color: black; hyphens: auto; text-underline-position: from-font; }
+.${c} { color: black; hyphens: ${this.document.settingsPart?.settings?.autoHyphenation ? "auto" : "manual"}; text-underline-position: from-font; }
 section.${c} { box-sizing: border-box; display: flex; flex-flow: column nowrap; position: relative; overflow: hidden; }
 section.${c}>article { margin-bottom: auto; z-index: 1; }
 section.${c}>footer { z-index: 1; }
