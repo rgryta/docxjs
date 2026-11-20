@@ -774,6 +774,7 @@
         DomType["MmlGroupChar"] = "mmlGroupChar";
         DomType["VmlElement"] = "vmlElement";
         DomType["Shape"] = "shape";
+        DomType["Group"] = "group";
         DomType["Inserted"] = "inserted";
         DomType["Deleted"] = "deleted";
         DomType["DeletedText"] = "deletedText";
@@ -1285,6 +1286,53 @@
         };
     }
 
+    const maxPercent = 1e6;
+    const pxPerPt = 4 / 3;
+    class DrawingGroup extends OpenXmlElementBase {
+        constructor() {
+            super(...arguments);
+            this.type = DomType.Group;
+        }
+    }
+    function groupFrame([ox, oy], [cw, ch], width, height, flipH, flipV) {
+        return [ox, oy, cw, ch, width, height].every(Number.isFinite) && cw > 0 && ch > 0 && width > 0 && height > 0
+            ? { ox, oy, cw, ch, width, height, flipH, flipV }
+            : null;
+    }
+    function placeChild(frame, [x, y, w, h], line, rotation) {
+        if (![x, y, w, h].every(Number.isFinite) || w < 0 || h < 0 || !(line ? w + h > 0 : w > 0 && h > 0))
+            return null;
+        const left = frame.flipH ? frame.cw - (x - frame.ox) - w : x - frame.ox;
+        const top = frame.flipV ? frame.ch - (y - frame.oy) - h : y - frame.oy;
+        const percents = [left / frame.cw, top / frame.ch, w / frame.cw, h / frame.ch].map(v => v * 100);
+        if (!percents.every(v => Math.abs(v) <= maxPercent))
+            return null;
+        const [l, t, pw, ph] = percents.map(v => `${v.toFixed(4)}%`);
+        return {
+            place: { left: l, top: t, width: pw, height: ph, rotation: frame.flipH != frame.flipV ? -rotation : rotation },
+            width: w / frame.cw * frame.width,
+            height: h / frame.ch * frame.height,
+        };
+    }
+    function integerPair(text, fallback) {
+        const parts = text.split(",");
+        return fallback.map((value, i) => {
+            const part = parts[i]?.trim();
+            return !part ? value : /^-?\d+$/.test(part) ? parseInt(part) : NaN;
+        });
+    }
+    function arrowHead(tip, from, strokeWidth, widthScale, lengthScale) {
+        const [tx, ty] = tip.map(v => v * pxPerPt);
+        const [fx, fy] = from.map(v => v * pxPerPt);
+        const distance = Math.hypot(tx - fx, ty - fy) || 1;
+        const [ux, uy] = [(tx - fx) / distance, (ty - fy) / distance];
+        const length = lengthScale * strokeWidth * pxPerPt;
+        const half = widthScale * strokeWidth * pxPerPt / 2;
+        const [bx, by] = [tx - ux * length, ty - uy * length];
+        const f = (v) => `${parseFloat(v.toFixed(2))}`;
+        return `M ${f(tx)} ${f(ty)} L ${f(bx - uy * half)} ${f(by + ux * half)} L ${f(bx + uy * half)} ${f(by - ux * half)} Z`;
+    }
+
     const vmlNamespace = "urn:schemas-microsoft-com:vml";
     const modifierTags = new Set(["stroke", "fill", "path", "formulas", "f", "handles", "h", "shadow", "textbox",
         "imagedata", "shapetype", "lock", "wrap", "anchorlock"]);
@@ -1295,7 +1343,7 @@
             this.parts = [];
         }
     }
-    function parseVmlElement(elem, parser, watermarkAllowed = false) {
+    function parseVmlElement(elem, parser, watermarkAllowed = false, frame = null) {
         if (elem.namespaceURI != vmlNamespace)
             return null;
         if (elem.localName == "shapetype") {
@@ -1303,6 +1351,8 @@
             id && parser.vmlShapeTypes.set(id, readShapeType(elem));
             return null;
         }
+        if (elem.localName == "group")
+            return parseVmlGroup(elem, parser, frame);
         switch (elem.localName) {
             case "rect":
             case "roundrect":
@@ -1354,6 +1404,14 @@
             return notDrawn(watermarkAllowed && elem.localName == "shape" ? "watermark" : "vml-element");
         const style = parseVmlStyle(globalXmlParser.attr(elem, "style"));
         result.box = parseBox(style);
+        if (frame) {
+            const line = elem.localName == "line";
+            const mapped = placeChild(frame, line ? lineRect(elem) : groupRect(style), line, result.box.rotation ?? 0);
+            if (!mapped)
+                return notDrawn("group-child");
+            result.place = mapped.place;
+            result.box = { placed: false, x: 0, y: 0, width: mapped.width, height: mapped.height, hidden: result.box.hidden };
+        }
         const imageId = imageData && globalXmlParser.attr(imageData, "id");
         const paint = parsePaint$1(elem, shapeType, stroke, fill);
         if (imageId) {
@@ -1373,9 +1431,11 @@
                 case "oval":
                     result.parts.push({ tagName: "ellipse", attrs: { cx: "50%", cy: "50%", rx: "50%", ry: "50%", ...paintAttrs(paint, true, true) } });
                     break;
-                case "line":
-                    result.parts.push(parseLine(elem, result.box, paint));
+                case "line": {
+                    const line = parseLine(elem, frame ? { ...result.box } : result.box, paint);
+                    result.parts.push(line, ...lineHeads(stroke, line.attrs, result.box, paint));
                     break;
+                }
                 case "shape": {
                     const pathText = globalXmlParser.attr(elem, "path") || shapeType.path;
                     const subpaths = pathText ? parseVmlPath(pathText) : null;
@@ -1398,10 +1458,14 @@
                 }
             }
         }
+        if (elem.localName != "line" && arrowTypes(stroke).some(type => type != "none"))
+            innerMarks.push(markPart("partial"));
         result.parts.push(...innerMarks);
-        const flip = style.get("flip");
-        if (flip)
-            result.flip = flip.length > 1 ? "scale(-1, -1)" : flip == "x" ? "scale(-1, 1)" : "scale(1, -1)";
+        const flip = style.get("flip") ?? "";
+        const flipX = flip.includes("x") != !!frame?.flipH;
+        const flipY = flip.includes("y") != !!frame?.flipV;
+        if (flipX || flipY)
+            result.flip = `scale(${flipX ? -1 : 1}, ${flipY ? -1 : 1})`;
         if (textBox) {
             result.textBox = parseTextBox(textBox, style.get("v-text-anchor"));
             const content = globalXmlParser.element(textBox, "txbxContent");
@@ -1411,6 +1475,63 @@
             result.children.push(...children);
         }
         return result;
+    }
+    function parseVmlGroup(elem, parser, frame) {
+        const style = parseVmlStyle(globalXmlParser.attr(elem, "style"));
+        const box = parseBox(style);
+        const mapped = frame && placeChild(frame, groupRect(style), false, box.rotation ?? 0);
+        const width = frame ? mapped?.width : box.width;
+        const height = frame ? mapped?.height : box.height;
+        const flip = style.get("flip") ?? "";
+        const childFrame = groupFrame(integerPair(globalXmlParser.attr(elem, "coordorigin") ?? "", [0, 0]), integerPair(globalXmlParser.attr(elem, "coordsize") ?? "", [1000, 1000]), width, height, flip.includes("x") != !!frame?.flipH, flip.includes("y") != !!frame?.flipV);
+        if (!childFrame || frame && !mapped)
+            return notDrawn("group-child");
+        const children = parser.nested(() => globalXmlParser.elements(elem).map(child => parseVmlElement(child, parser, false, childFrame)).filter(Boolean));
+        if (!children)
+            return notDrawn("depth");
+        const group = new DrawingGroup();
+        group.width = width;
+        group.height = height;
+        group.children = children;
+        if (frame) {
+            group.place = mapped.place;
+            return group;
+        }
+        const result = new VmlElement();
+        const wrap = globalXmlParser.elements(elem).find(child => child.localName == "wrap");
+        result.box = box;
+        result.group = group;
+        result.wrapType = wrap ? globalXmlParser.attr(wrap, "type") : undefined;
+        return result;
+    }
+    function groupUnit(value, fallback = null) {
+        return value == null ? fallback : /^-?\d+$/.test(value) ? parseInt(value) : NaN;
+    }
+    function groupRect(style) {
+        return [groupUnit(style.get("left"), 0), groupUnit(style.get("top"), 0), groupUnit(style.get("width")), groupUnit(style.get("height"))];
+    }
+    function lineRect(elem) {
+        const [x1, y1] = integerPair(globalXmlParser.attr(elem, "from") ?? "", [0, 0]);
+        const [x2, y2] = integerPair(globalXmlParser.attr(elem, "to") ?? "", [0, 0]);
+        return [Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1)];
+    }
+    const drawnArrows = new Set(["block", "classic", "open"]);
+    const arrowScale = { narrow: 2, short: 2, medium: 3, wide: 5, long: 5 };
+    function arrowTypes(stroke) {
+        return ["startarrow", "endarrow"].map(name => (stroke && globalXmlParser.attr(stroke, name))?.trim().toLowerCase() ?? "none");
+    }
+    function lineHeads(stroke, line, box, paint) {
+        const corner = (x, y) => [x == "0" ? 0 : box.width, y == "0" ? 0 : box.height];
+        const ends = [corner(line.x1, line.y1), corner(line.x2, line.y2)];
+        return arrowTypes(stroke).flatMap((type, i) => {
+            if (type == "none" || !paint.stroke)
+                return [];
+            if (!drawnArrows.has(type))
+                return [markPart("partial")];
+            const scale = (name) => arrowScale[(globalXmlParser.attr(stroke, `${["start", "end"][i]}arrow${name}`) ?? "").trim().toLowerCase()] ?? 3;
+            const d = arrowHead(ends[i], ends[1 - i], paint.strokeWidth, scale("width"), scale("length"));
+            return [{ tagName: "path", attrs: { d, fill: paint.stroke, stroke: "none" } }];
+        });
     }
     function notDrawn(reason) {
         const result = new VmlElement();
@@ -1726,7 +1847,10 @@
     }
 
     const shapeNamespace = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
+    const groupNamespace = "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup";
     const drawnPresets = new Set(["rect", "roundRect", "ellipse", "line"]);
+    const groupProps = new Set(["cNvPr", "cNvGrpSpPr", "nvGrpSpPr", "grpSpPr", "extLst"]);
+    const maxDepth = 16;
     const maxEmu = 1e12;
     class DmlShape extends OpenXmlElementBase {
         constructor() {
@@ -1743,24 +1867,24 @@
         return value == null ? null : value / 12700;
     }
     const descendant = (root, localName) => Array.from(root.getElementsByTagNameNS("*", localName));
-    function isDrawableShape(wsp) {
+    function isDrawableShape(wsp, inGroup = false) {
         const spPr = globalXmlParser.element(wsp, "spPr");
         const prst = spPr && globalXmlParser.elementAttr(spPr, "prstGeom", "prst");
         const bodyPr = globalXmlParser.element(wsp, "bodyPr");
         const warp = bodyPr && globalXmlParser.element(bodyPr, "prstTxWarp");
-        return drawnPresets.has(prst)
+        return (drawnPresets.has(prst) || inGroup && prst == "straightConnector1")
             && !globalXmlParser.element(spPr, "custGeom")
             && ["gradFill", "pattFill", "blipFill"].every(name => !descendant(spPr, name).length)
             && !globalXmlParser.element(wsp, "linkedTxbx")
             && (!bodyPr || (globalXmlParser.attr(bodyPr, "vert") ?? "horz") == "horz" && !globalXmlParser.boolAttr(bodyPr, "fromWordArt", false))
             && (!warp || globalXmlParser.attr(warp, "prst") == "textNoShape")
-            && (prst != "line" || ["headEnd", "tailEnd"].every(name => descendant(spPr, name).every(end => (globalXmlParser.attr(end, "type") ?? "none") == "none")));
+            && (prst != "line" || inGroup || ["headEnd", "tailEnd"].every(name => descendant(spPr, name).every(end => (globalXmlParser.attr(end, "type") ?? "none") == "none")));
     }
     function canDrawChoice(choice) {
         const requires = globalXmlParser.attr(choice, "Requires");
         const children = globalXmlParser.elements(choice);
         return !!requires
-            && requires.split(" ").every(prefix => prefix && choice.lookupNamespaceURI(prefix) == shapeNamespace)
+            && requires.split(" ").every(prefix => prefix && [shapeNamespace, groupNamespace].includes(choice.lookupNamespaceURI(prefix)))
             && children.length > 0
             && children.every(child => child.localName == "drawing" && drawsShapes(child));
     }
@@ -1769,7 +1893,14 @@
         const graphic = wrapper && globalXmlParser.element(wrapper, "graphic");
         const graphicData = graphic && globalXmlParser.element(graphic, "graphicData");
         const shapes = graphicData ? globalXmlParser.elements(graphicData) : [];
-        return shapes.length > 0 && shapes.every(s => s.namespaceURI == shapeNamespace && s.localName == "wsp" && isDrawableShape(s));
+        return shapes.length > 0 && shapes.every(s => s.namespaceURI == shapeNamespace && s.localName == "wsp" && isDrawableShape(s)
+            || s.namespaceURI == groupNamespace && s.localName == "wgp" && drawsGroup(s, 1));
+    }
+    function drawsGroup(group, depth) {
+        return depth <= maxDepth && globalXmlParser.elements(group).every(child => groupProps.has(child.localName)
+            || child.localName == "wsp" && isDrawableShape(child, true)
+            || child.localName == "pic"
+            || child.localName == "grpSp" && drawsGroup(child, depth + 1));
     }
     function parseShape(wsp, parser) {
         const spPr = globalXmlParser.element(wsp, "spPr");
@@ -1782,7 +1913,7 @@
         const txbx = globalXmlParser.element(wsp, "txbx");
         const content = txbx && globalXmlParser.element(txbx, "txbxContent");
         const result = new DmlShape();
-        result.geometry = globalXmlParser.attr(geometry, "prst");
+        result.geometry = globalXmlParser.attr(geometry, "prst") == "straightConnector1" ? "line" : globalXmlParser.attr(geometry, "prst");
         result.radius = adjustment(geometry);
         result.width = ext ? emuPoints(globalXmlParser.attr(ext, "cx")) : null;
         result.height = ext ? emuPoints(globalXmlParser.attr(ext, "cy")) : null;
@@ -1795,6 +1926,8 @@
         result.lnRef = parseStyleRef(style, "lnRef");
         result.fontRef = parseStyleRef(style, "fontRef");
         result.autoFit = !!bodyPr && !!globalXmlParser.element(bodyPr, "spAutoFit");
+        result.headEnd = parseLineEnd(ln, "headEnd");
+        result.tailEnd = parseLineEnd(ln, "tailEnd");
         if (content) {
             const children = parser.parseTextBoxContent(content);
             if (!children)
@@ -1803,6 +1936,10 @@
             result.textBox = parseBodyProps(bodyPr);
         }
         return result;
+    }
+    function parseLineEnd(ln, name) {
+        const end = ln && globalXmlParser.element(ln, name);
+        return end ? { type: globalXmlParser.attr(end, "type") ?? "none", width: globalXmlParser.attr(end, "w"), length: globalXmlParser.attr(end, "len") } : null;
     }
     function adjustment(geometry) {
         const list = globalXmlParser.element(geometry, "avLst");
@@ -1865,6 +2002,55 @@
                 v: simplePos ? { relative: "page", offset: emuPoints(globalXmlParser.attr(simplePos, "y")) } : axis("positionV"),
             }
         };
+    }
+    function parseDrawingGroup(wgp, extent, parser) {
+        return parseGroup(wgp, parser, extent ? emuPoints(globalXmlParser.attr(extent, "cx")) : null, extent ? emuPoints(globalXmlParser.attr(extent, "cy")) : null, false, false);
+    }
+    function xfrmPair(xfrm, name, a, b) {
+        const el = xfrm && globalXmlParser.element(xfrm, name);
+        return el ? [integer(globalXmlParser.attr(el, a)), integer(globalXmlParser.attr(el, b))] : [null, null];
+    }
+    function parseGroup(group, parser, width, height, flipH, flipV) {
+        const props = globalXmlParser.element(group, "grpSpPr");
+        const xfrm = props && globalXmlParser.element(props, "xfrm");
+        const frame = groupFrame(xfrmPair(xfrm, "chOff", "x", "y"), xfrmPair(xfrm, "chExt", "cx", "cy"), width, height, flipH != (!!xfrm && globalXmlParser.boolAttr(xfrm, "flipH", false)), flipV != (!!xfrm && globalXmlParser.boolAttr(xfrm, "flipV", false)));
+        if (!frame)
+            return notDrawn("group-child");
+        const children = parser.nested(() => globalXmlParser.elements(group)
+            .filter(child => !groupProps.has(child.localName))
+            .map(child => parseGroupChild(child, parser, frame)));
+        if (!children)
+            return notDrawn("depth");
+        const result = new DrawingGroup();
+        result.width = width;
+        result.height = height;
+        result.children = children;
+        return result;
+    }
+    function parseGroupChild(child, parser, frame) {
+        const kind = child.localName;
+        if (kind == "wsp" ? !isDrawableShape(child, true) : kind != "grpSp" && kind != "pic")
+            return notDrawn("group-child");
+        const props = globalXmlParser.element(child, kind == "grpSp" ? "grpSpPr" : "spPr");
+        const xfrm = props && globalXmlParser.element(props, "xfrm");
+        const line = kind == "wsp" && ["line", "straightConnector1"].includes(props && globalXmlParser.elementAttr(props, "prstGeom", "prst"));
+        const rotation = ((xfrm && integer(globalXmlParser.attr(xfrm, "rot"))) ?? 0) % 21600000 / 60000;
+        const mapped = placeChild(frame, [...xfrmPair(xfrm, "off", "x", "y"), ...xfrmPair(xfrm, "ext", "cx", "cy")], line, rotation);
+        if (!mapped)
+            return notDrawn("group-child");
+        if (kind == "pic")
+            return { ...parser.parsePicture(child), cssStyle: {}, rotation: 0, place: mapped.place };
+        const result = kind == "grpSp" ? parseGroup(child, parser, mapped.width, mapped.height, frame.flipH, frame.flipV) : parseShape(child, parser);
+        if (result instanceof DmlShape) {
+            result.width = mapped.width;
+            result.height = mapped.height;
+            result.rotation = 0;
+            result.flipH = result.flipH != frame.flipH;
+            result.flipV = result.flipV != frame.flipV;
+        }
+        if (result instanceof DmlShape || result instanceof DrawingGroup)
+            result.place = mapped.place;
+        return result;
     }
     const hex6 = /^[0-9A-Fa-f]{6}$/;
     const schemeAliases = new Map([["bg1", "lt1"], ["tx1", "dk1"], ["bg2", "lt2"], ["tx2", "dk2"]]);
@@ -2011,7 +2197,7 @@
     class DocumentParser {
         constructor(options) {
             this.vmlShapeTypes = new Map();
-            this.textBoxDepth = 0;
+            this.drawingDepth = 0;
             this.options = {
                 ignoreWidth: false,
                 debug: false,
@@ -2065,14 +2251,17 @@
             return result;
         }
         parseTextBoxContent(element) {
-            if (this.textBoxDepth >= 16)
+            return this.nested(() => this.parseBodyElements(element));
+        }
+        nested(parse) {
+            if (this.drawingDepth >= 16)
                 return null;
-            this.textBoxDepth++;
+            this.drawingDepth++;
             try {
-                return this.parseBodyElements(element);
+                return parse();
             }
             finally {
-                this.textBoxDepth--;
+                this.drawingDepth--;
             }
         }
         parseBodyElements(element) {
@@ -2719,8 +2908,8 @@
                         break;
                 }
             }
-            if (g?.type == DomType.Shape)
-                return parseShapeDrawing(node, g, this.textBoxDepth > 0);
+            if (g?.type == DomType.Shape || g?.type == DomType.Group)
+                return parseShapeDrawing(node, g, this.drawingDepth > 0);
             if (wrapType == "wrapTopAndBottom") {
                 result.cssStyle['display'] = 'block';
                 if (posX.align) {
@@ -2751,6 +2940,8 @@
                         return this.parsePicture(n);
                     case "wsp":
                         return isDrawableShape(n) ? parseShape(n, this) : notDrawn("graphic");
+                    case "wgp":
+                        return parseDrawingGroup(n, globalXmlParser.element(elem.parentNode, "extent"), this);
                 }
             }
             return notDrawn("graphic");
@@ -3607,6 +3798,8 @@
         topMargin: ["0pt", marginTop],
         bottomMargin: [`(${pageHeight} - ${marginBottom})`, marginBottom],
     };
+    const drawnHeads = new Set(["triangle", "arrow", "stealth"]);
+    const headScale = { sm: 2, med: 3, lg: 5 };
     const hasOwn = (record, key) => key != null && Object.prototype.hasOwnProperty.call(record, key);
     const pt = (value) => `${formatNumber(value)}pt`;
     class HtmlRenderer {
@@ -4174,6 +4367,10 @@ section.${c}>footer { z-index: 1; }
                     return this.renderVmlPicture(elem);
                 case DomType.VmlElement:
                     return this.renderVmlElement(elem);
+                case DomType.Shape:
+                    return this.renderDmlShape(elem);
+                case DomType.Group:
+                    return this.renderGroup(elem);
                 case DomType.MmlMath:
                     return this.renderContainerNS(elem, ns.mathML, "math", { xmlns: ns.mathML });
                 case DomType.MmlMathParagraph:
@@ -4341,6 +4538,8 @@ section.${c}>footer { z-index: 1; }
             if (elem.rotation)
                 transform = `rotate(${elem.rotation}deg) ${transform ?? ''}`;
             result.style.transform = transform?.trim();
+            if (elem.place)
+                this.placeInGroup(elem.place, result.style);
             if (this.document) {
                 this.tasks.push(this.document.loadDocumentImage(elem.src, this.currentPart).then(x => {
                     result.src = x;
@@ -4469,7 +4668,18 @@ section.${c}>footer { z-index: 1; }
                 return mark;
             }
             const box = this.h({ tagName: "span" });
-            this.placeVmlBox(elem, box.style);
+            if (elem.place) {
+                this.placeInGroup(elem.place, box.style);
+                if (elem.box.hidden)
+                    box.style.setProperty("visibility", "hidden");
+            }
+            else {
+                this.placeVmlBox(elem, box.style);
+            }
+            if (elem.group) {
+                box.appendChild(this.renderGroup(elem.group));
+                return box;
+            }
             const sizeless = !!elem.imageHref && elem.box.width == null && elem.box.height == null;
             const svg = this.renderShape(box, elem, !sizeless);
             if (sizeless) {
@@ -4526,11 +4736,38 @@ section.${c}>footer { z-index: 1; }
             return svg;
         }
         renderShapeDrawing(elem) {
+            const wrapper = this.h({ tagName: "div" });
+            if (elem.children[0].type == DomType.Group) {
+                const group = elem.children[0];
+                this.placeShapeWrapper(elem.anchor, false, wrapper.style, elem.anchor.width ?? group.width, elem.anchor.height ?? group.height);
+                wrapper.appendChild(this.renderGroup(group));
+                return wrapper;
+            }
             const shape = elem.children[0];
             const width = Math.max(0, shape.width ?? elem.anchor.width ?? 0);
             const height = Math.max(0, shape.height ?? elem.anchor.height ?? 0);
             if (shape.geometry != "line" && !(width > 0 && height > 0))
                 return null;
+            this.placeShapeWrapper(elem.anchor, shape.autoFit, wrapper.style, elem.anchor.width ?? width, elem.anchor.height ?? height);
+            wrapper.appendChild(this.renderDmlShape(shape, width, height));
+            return wrapper;
+        }
+        renderGroup(group) {
+            const box = this.h({ tagName: "div" });
+            for (const [key, value] of [["display", "block"], ["position", "relative"], ["width", pt(group.width)], ["height", pt(group.height)]])
+                box.style.setProperty(key, value);
+            if (group.place)
+                this.placeInGroup(group.place, box.style);
+            this.renderElements(group.children, box);
+            return box;
+        }
+        placeInGroup(place, style) {
+            for (const [key, value] of [["display", "block"], ["position", "absolute"], ["left", place.left], ["top", place.top], ["width", place.width], ["height", place.height]])
+                style.setProperty(key, value);
+            if (place.rotation)
+                style.setProperty("transform", `rotate(${formatNumber(place.rotation)}deg) ${style.transform}`.trim());
+        }
+        renderDmlShape(shape, width = shape.width, height = shape.height) {
             const theme = this.document?.themePart?.theme;
             let partial = false;
             const resolve = (spec, ref) => {
@@ -4562,15 +4799,30 @@ section.${c}>footer { z-index: 1; }
                 return result;
             };
             const radius = pt(shape.radius * Math.min(width, height));
+            const lineEnd = shape.place ? [width, height].map(v => formatNumber(v * 4 / 3)) : ["100%", "100%"];
             const parts = [
                 shape.geometry == "ellipse" ? { tagName: "ellipse", attrs: { cx: "50%", cy: "50%", rx: "50%", ry: "50%", ...attrs(true) } }
-                    : shape.geometry == "line" ? { tagName: "line", attrs: { x1: "0", y1: "0", x2: "100%", y2: "100%", ...attrs(false) } }
+                    : shape.geometry == "line" ? { tagName: "line", attrs: { x1: "0", y1: "0", x2: lineEnd[0], y2: lineEnd[1], ...attrs(false) } }
                         : { tagName: "rect", attrs: { width: "100%", height: "100%", ...(shape.geometry == "roundRect" ? { rx: radius, ry: radius } : {}), ...attrs(true) } }
             ];
+            if (shape.geometry == "line" && paint.stroke) {
+                const ends = [[0, 0], [width, height]];
+                [shape.headEnd, shape.tailEnd].forEach((end, i) => {
+                    if (!end || end.type == "none")
+                        return;
+                    if (!drawnHeads.has(end.type)) {
+                        partial = true;
+                        return;
+                    }
+                    const d = arrowHead(ends[i], ends[1 - i], paint.strokeWidth, headScale[end.width] ?? 3, headScale[end.length] ?? 3);
+                    const head = { d, fill: paint.stroke, stroke: "none" };
+                    if (stroke.alpha < 1)
+                        head["fill-opacity"] = formatNumber(stroke.alpha);
+                    parts.push({ tagName: "path", attrs: head });
+                });
+            }
             if (partial)
                 parts.push({ tagName: "g", attrs: { "data-docx-not-drawn": "partial" } });
-            const wrapper = this.h({ tagName: "div" });
-            this.placeShapeWrapper(elem.anchor, shape.autoFit, wrapper.style, elem.anchor.width ?? width, elem.anchor.height ?? height);
             const box = this.h({ tagName: "span" });
             const set = (key, value) => box.style.setProperty(key, value);
             set("display", "block");
@@ -4583,10 +4835,11 @@ section.${c}>footer { z-index: 1; }
                 set("min-height", "1px");
             if (shape.rotation)
                 set("transform", `rotate(${formatNumber(shape.rotation)}deg)`);
+            if (shape.place)
+                this.placeInGroup(shape.place, box.style);
             const flip = shape.flipH || shape.flipV ? `scale(${shape.flipH ? -1 : 1}, ${shape.flipV ? -1 : 1})` : undefined;
             this.renderShape(box, { parts, flip, textBox: shape.textBox, children: shape.children }, true, text && formatColor(text));
-            wrapper.appendChild(box);
-            return wrapper;
+            return box;
         }
         placeShapeWrapper(anchor, autoFit, style, width, height) {
             const set = (key, value) => style.setProperty(key, value);
