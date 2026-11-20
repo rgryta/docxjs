@@ -1497,6 +1497,7 @@ export class DocumentParser {
 		if (after) style["margin-bottom"] = after;
 
 		if (line) {
+			style["--docx-run-line-height"] = lineRule == "atLeast" ? "normal" : "initial";
 			if (lineRule == "auto") {
 				// a unit (or a zero) is not a valid multiple of 240ths and would collapse the lines
 				const multiple = Number(line) / 240;
@@ -1506,10 +1507,7 @@ export class DocumentParser {
 			} else {
 				const length = convertLength(line, LengthUsage.Dxa);
 
-				if (lineRule == "atLeast")
-					style["line-height"] = `calc(100% + ${length})`;
-				else
-					style["line-height"] = style["min-height"] = length;
+				style["line-height"] = style["min-height"] = length;
 			}
 		}
 	}
