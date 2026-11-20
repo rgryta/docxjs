@@ -462,8 +462,14 @@
             chapSep: xml.attr(elem, "chapSep"),
             chapStyle: xml.attr(elem, "chapStyle"),
             format: xml.attr(elem, "fmt"),
-            start: xml.intAttr(elem, "start")
+            start: parsePageStart(xml.attr(elem, "start"))
         };
+    }
+    function parsePageStart(value) {
+        if (value == null)
+            return null;
+        const start = Number(value);
+        return value.trim() && Number.isInteger(start) && start >= 0 ? start : 1;
     }
     function parseFooterHeaderReference(elem, xml) {
         return {
@@ -745,6 +751,7 @@
         DomType["SimpleField"] = "simpleField";
         DomType["ComplexField"] = "complexField";
         DomType["Instruction"] = "instruction";
+        DomType["FieldResult"] = "fieldResult";
         DomType["VmlPicture"] = "vmlPicture";
         DomType["MmlMath"] = "mmlMath";
         DomType["MmlMathParagraph"] = "mmlMathParagraph";
@@ -2574,7 +2581,7 @@
         parseAltChunk(node) {
             return { type: DomType.AltChunk, children: [], id: globalXmlParser.attr(node, "id") };
         }
-        parseParagraph(node) {
+        parseParagraph(node, fillFields = true) {
             var result = { type: DomType.Paragraph, children: [] };
             for (let el of globalXmlParser.elements(node)) {
                 switch (el.localName) {
@@ -2607,16 +2614,23 @@
                         result.children.push(this.parseMathElement(el));
                         break;
                     case "sdt":
-                        result.children.push(...this.parseSdt(el, e => this.parseParagraph(e).children));
+                        result.children.push(...this.parseSdt(el, e => this.parseParagraph(e, false).children));
                         break;
                     case "ins":
-                        result.children.push(this.parseChange(DomType.Inserted, el, e => this.parseParagraph(e)));
+                        result.children.push(this.parseChange(DomType.Inserted, el, e => this.parseParagraph(e, false)));
                         break;
                     case "del":
-                        result.children.push(this.parseChange(DomType.Deleted, el, e => this.parseParagraph(e)));
+                        result.children.push(this.parseChange(DomType.Deleted, el, e => this.parseParagraph(e, false)));
                         break;
+                    case "fldSimple": {
+                        const field = pageFieldResult(globalXmlParser.attr(el, "instr"), globalXmlParser.elements(el, "r").map(r => this.parseRun(r, result)));
+                        field && result.children.push(field);
+                        break;
+                    }
                 }
             }
+            if (fillFields)
+                wrapPageFields(result.children);
             return result;
         }
         parseParagraphProperties(elem, paragraph) {
@@ -3589,6 +3603,57 @@
             return className.trim();
         }
     }
+    const pageFieldInstruction = /^\s*(PAGE|NUMPAGES)(\s+\\\*\s*(MERGEFORMAT|ARABIC))*\s*$/i;
+    function pageFieldResult(instruction, children) {
+        const field = instruction?.match(pageFieldInstruction)?.[1].toUpperCase();
+        if (!field || children.some(c => c.type == DomType.Run && c.children.some(x => x.type == DomType.Break)))
+            return null;
+        return { type: DomType.FieldResult, field: field, children };
+    }
+    function wrapPageFields(children) {
+        const open = [];
+        const closed = [];
+        children.forEach((child, index) => {
+            if (child.type != DomType.Run)
+                return;
+            for (const c of child.children) {
+                const top = open[open.length - 1];
+                if (c.type == DomType.ComplexField) {
+                    const charType = c.charType;
+                    if (charType == "begin") {
+                        open.forEach(f => f.fillable = false);
+                        open.push({ fillable: !open.length, instruction: "", run: child, separate: -1, end: -1, savedText: "" });
+                    }
+                    else if (charType == "separate" && top) {
+                        top.separate = index;
+                    }
+                    else if (charType == "end" && top) {
+                        open.pop();
+                        top.end = index;
+                        top.fillable && closed.push(top);
+                    }
+                }
+                else if (c.type == DomType.Instruction && top) {
+                    top.instruction += c.text;
+                }
+                else if (c.type == DomType.Text && top?.separate == index) {
+                    top.savedText += c.text;
+                }
+            }
+        });
+        for (const f of closed.reverse()) {
+            const between = f.separate < 0 ? [] : children.slice(f.separate + 1, f.end);
+            if (between.some(c => c.type == DomType.Run)) {
+                const field = pageFieldResult(f.instruction, between);
+                field && children.splice(f.separate + 1, between.length, field);
+            }
+            else {
+                const run = { ...f.run, fieldRun: false, children: [{ type: DomType.Text, text: f.savedText }] };
+                const field = pageFieldResult(f.instruction, [run]);
+                field && children.splice(f.end, 0, field);
+            }
+        }
+    }
 
     const registered = new WeakMap();
     const posTolerance = 0.01;
@@ -4051,6 +4116,11 @@
                 const section = pages[i][0];
                 let props = section.sectProps;
                 const pageElement = this.createPageElement(this.className, props, document.cssStyle);
+                const pageNumber = props?.pageNumber;
+                if (pageNumber?.start != null && prevProps != props && props.type != SectionType.Continuous && props.type != SectionType.NextColumn)
+                    pageElement.setAttribute("data-page-start", String(pageNumber.start));
+                if (pageNumber?.chapStyle || pageNumber?.format && pageNumber.format != "decimal")
+                    pageElement.setAttribute("data-page-format", "other");
                 this.options.renderHeaders && this.renderHeaderFooter(props.headerRefs, props, result.length, prevProps != props, pageElement);
                 for (const sect of pages[i]) {
                     var contentElement = this.createSectionContent(sect.sectProps);
@@ -4130,6 +4200,10 @@
             return prev.pageSize?.orientation != next.pageSize?.orientation
                 || prev.pageSize?.width != next.pageSize?.width
                 || prev.pageSize?.height != next.pageSize?.height;
+        }
+        isNewPageSection(prev, next) {
+            return this.options.ignoreLastRenderedPageBreak && prev !== next
+                && (!next?.type || next.type == SectionType.NextPage || next.type == SectionType.EvenPage || next.type == SectionType.OddPage);
         }
         splitBySection(elements, defaultProps) {
             var current = { sectProps: null, elements: [], pageBreak: false };
@@ -4220,13 +4294,18 @@
         }
         groupByPageBreaks(sections) {
             let current = [];
-            let prev;
+            let prev = null;
+            let pageBreak = false;
             const result = [current];
             for (let s of sections) {
+                if (s.elements.length) {
+                    if (prev && (pageBreak || this.isPageBreakSection(prev.sectProps, s.sectProps) || this.isNewPageSection(prev.sectProps, s.sectProps)))
+                        result.push(current = []);
+                    prev = s;
+                    pageBreak = false;
+                }
                 current.push(s);
-                if (this.options.ignoreLastRenderedPageBreak || s.pageBreak || this.isPageBreakSection(prev, s.sectProps))
-                    result.push(current = []);
-                prev = s.sectProps;
+                pageBreak || (pageBreak = s.pageBreak);
             }
             return result.filter(x => x.length > 0);
         }
@@ -4370,6 +4449,8 @@ section.${c}>footer { z-index: 1; }
                     return null;
                 case DomType.Run:
                     return this.renderRun(elem);
+                case DomType.FieldResult:
+                    return this.renderFieldResult(elem);
                 case DomType.Table:
                     return this.renderTable(elem);
                 case DomType.Row:
@@ -4643,6 +4724,11 @@ section.${c}>footer { z-index: 1; }
         }
         renderBookmarkStart(elem) {
             return this.h({ tagName: "span", id: elem.name });
+        }
+        renderFieldResult(elem) {
+            const result = this.h({ tagName: "span", children: this.renderElements(elem.children) });
+            result.setAttribute("data-docx-field", elem.field);
+            return result;
         }
         renderRun(elem) {
             if (elem.fieldRun)
@@ -5200,19 +5286,70 @@ section.${c}>footer { z-index: 1; }
     function paginate(root, className = "docx", options) {
         const deadline = options?.budgetMs === undefined ? Infinity : performance.now() + options.budgetMs;
         const pages = Array.from(root.querySelectorAll(`section.${className}`));
-        let done = true;
+        const savedCounts = new Map(Array.from(root.querySelectorAll('[data-docx-field="NUMPAGES"]')).map((f) => [f, f.textContent]));
+        let done = splitPages(pages, className, deadline);
+        if (fillPages(pages, done)) {
+            const count = pages.length;
+            done = splitPages(pages, className, deadline) && done;
+            if (!done)
+                restoreCounts(pages, savedCounts);
+            if (pages.length != count)
+                fillPages(pages, done);
+        }
+        return done;
+    }
+    function splitPages(pages, className, deadline) {
+        let number = 0;
         for (let i = 0; i < pages.length; i++) {
-            if (pages.length >= MAX_PAGES || performance.now() >= deadline) {
-                done = false;
-                break;
-            }
-            showHeaderFooter(pages[i], i);
+            if (pages.length >= MAX_PAGES || performance.now() >= deadline)
+                return false;
+            number = pageNumber(pages[i], number);
+            showHeaderFooter(pages[i], number);
             const next = splitPage(pages[i], className);
             if (next)
                 pages.splice(i + 1, 0, next);
         }
-        pages.forEach(showHeaderFooter);
-        return done;
+        return true;
+    }
+    function pageNumber(page, previous) {
+        const start = page.getAttribute("data-page-start");
+        return start === null ? previous + 1 : Number(start);
+    }
+    function fillPages(pages, withCount) {
+        let number = 0;
+        let changed = false;
+        for (const page of pages) {
+            number = pageNumber(page, number);
+            if (!page.hasAttribute("data-page-format"))
+                fields(page, "PAGE").forEach(f => changed = setFieldText(f, String(number)) || changed);
+            if (withCount)
+                fields(page, "NUMPAGES").forEach(f => changed = setFieldText(f, String(pages.length)) || changed);
+            showHeaderFooter(page, number);
+        }
+        return changed;
+    }
+    function restoreCounts(pages, saved) {
+        let previous = [];
+        for (const page of pages) {
+            previous = fields(page, "NUMPAGES").map((f, i) => {
+                const text = saved.get(f) ?? previous[i];
+                text != null && setFieldText(f, text);
+                return text;
+            });
+        }
+    }
+    function fields(page, field) {
+        return Array.from(page.querySelectorAll(`[data-docx-field="${field}"]`));
+    }
+    function setFieldText(field, text) {
+        const before = field.textContent;
+        const walker = document.createTreeWalker(field, NodeFilter.SHOW_TEXT);
+        let first = true;
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+            n.data = first ? text : "";
+            first = false;
+        }
+        return field.textContent != before;
     }
     function splitPage(page, className = "docx") {
         const children = Array.from(page.children);
@@ -5270,6 +5407,7 @@ section.${c}>footer { z-index: 1; }
         }
         const next = page.cloneNode(false);
         next.removeAttribute("data-docx-first-page");
+        next.removeAttribute("data-page-start");
         for (const c of children) {
             if (c.tagName === "HEADER" && c.dataset.docxHf !== "first")
                 next.appendChild(c.cloneNode(true));
@@ -5292,12 +5430,12 @@ section.${c}>footer { z-index: 1; }
         page.after(next);
         return next;
     }
-    function showHeaderFooter(page, index) {
+    function showHeaderFooter(page, number) {
         for (const tag of ["HEADER", "FOOTER"]) {
             const alternates = Array.from(page.children).filter(c => c.tagName === tag && c.dataset.docxHf);
             const find = (type) => alternates.find(c => c.dataset.docxHf === type);
             const pick = (page.hasAttribute("data-docx-first-page") ? find("first") : null)
-                ?? (index % 2 == 1 ? find("even") : null)
+                ?? (number % 2 == 0 ? find("even") : null)
                 ?? find("default");
             for (const c of alternates) {
                 if ((c === pick) === (c.style.display === "none"))
