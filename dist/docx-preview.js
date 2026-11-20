@@ -117,11 +117,14 @@
         Border: { mul: 0.125, unit: "pt", min: 0.25, max: 12 },
         Point: { mul: 1, unit: "pt" },
         Percent: { mul: 0.02, unit: "%" }};
+    const pointsPerUnit = { mm: 72 / 25.4, cm: 72 / 2.54, in: 72, pc: 12, pi: 12 };
+    const universalMeasure = /^(-?(?:\d+\.?\d*|\.\d+))(mm|cm|in|pc|pi)$/;
     function convertLength(val, usage = LengthUsage.Dxa) {
         if (val == null || /.+(p[xt]|[%])$/.test(val)) {
             return val;
         }
-        var num = parseInt(val) * usage.mul;
+        const measure = usage.unit == "pt" ? universalMeasure.exec(val) : null;
+        var num = measure ? parseFloat(measure[1]) * pointsPerUnit[measure[2]] : parseInt(val) * usage.mul;
         if (usage.min && usage.max)
             num = clamp(num, usage.min, usage.max);
         return `${num.toFixed(2)}${usage.unit}`;
@@ -2567,23 +2570,22 @@
         parseSpacing(node, style) {
             var before = globalXmlParser.lengthAttr(node, "before");
             var after = globalXmlParser.lengthAttr(node, "after");
-            var line = globalXmlParser.intAttr(node, "line", null);
-            var lineRule = globalXmlParser.attr(node, "lineRule");
+            var line = globalXmlParser.attr(node, "line");
+            var lineRule = globalXmlParser.attr(node, "lineRule") ?? "auto";
             if (before)
                 style["margin-top"] = before;
             if (after)
                 style["margin-bottom"] = after;
-            if (line !== null) {
-                switch (lineRule) {
-                    case "auto":
-                        style["line-height"] = `${(line / 240).toFixed(2)}`;
-                        break;
-                    case "atLeast":
-                        style["line-height"] = `calc(100% + ${line / 20}pt)`;
-                        break;
-                    default:
-                        style["line-height"] = style["min-height"] = `${line / 20}pt`;
-                        break;
+            if (line) {
+                if (lineRule == "auto") {
+                    style["line-height"] = `${(parseInt(line) / 240).toFixed(2)}`;
+                }
+                else {
+                    const length = /(mm|cm|in|pc|pi|pt)$/.test(line) ? convertLength(line, LengthUsage.Dxa) : `${parseInt(line) / 20}pt`;
+                    if (lineRule == "atLeast")
+                        style["line-height"] = `calc(100% + ${length})`;
+                    else
+                        style["line-height"] = style["min-height"] = length;
                 }
             }
         }
@@ -3385,11 +3387,10 @@ section.${c}>footer { z-index: 1; }
                         console.warn(`Can't find linked style ${style.linked}`);
                 }
                 for (const subStyle of subStyles) {
-                    var selector = `${style.target ?? ''}.${style.cssName}`;
-                    if (style.target != subStyle.target)
-                        selector += ` ${subStyle.target}`;
+                    const subTarget = style.target != subStyle.target ? ` ${subStyle.target}` : '';
+                    var selector = `${style.target ?? ''}.${style.cssName}${subTarget}`;
                     if (defautStyles[style.target] == style)
-                        selector = `.${this.className} ${style.target}, ` + selector;
+                        selector = `.${this.className} ${style.target}${subTarget}, ` + selector;
                     styleText += this.styleToString(selector, subStyle.values);
                 }
             }
