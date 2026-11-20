@@ -53,6 +53,7 @@ export enum DomType {
 	MmlBar = "mmlBar",
 	MmlGroupChar = "mmlGroupChar",
 	VmlElement = "vmlElement",
+	Shape = "shape",
 	Inserted = "inserted",
 	Deleted = "deleted",
 	DeletedText = "deletedText",
