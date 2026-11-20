@@ -187,7 +187,9 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	const below = footer ? outerHeight(footer) : 0;
 	const limitY = page.getBoundingClientRect().top + pageHeight - (parseFloat(style.paddingBottom) || 0) - below + 0.5;
 
-	if (limitY - articles[0].getBoundingClientRect().top < MIN_SPLIT_HEIGHT)
+	const pageSpace = limitY - articles[0].getBoundingClientRect().top;
+
+	if (pageSpace < MIN_SPLIT_HEIGHT)
 		return null;
 
 	// A footnote list stays on the page with its references: the page keeps as many notes as it keeps
@@ -242,11 +244,7 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	}
 
 	if (over < 0 && keptNotes == items.length) {
-		for (const f of flow) {
-			if (f.article && isBlank(f.block) && f.block.getBoundingClientRect().bottom > limitY)
-				f.block.style.display = "none";
-		}
-
+		hideBlankOverflow(flow, limitY);
 		return null;
 	}
 
@@ -259,17 +257,19 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	else if (over >= 0 && flow[over].block.tagName === "P")
 		carry = splitParagraph(flow[over].block, splitLimit, className);
 
-	if (carry) {
-		cut = over + 1;
+	if (carry || over >= 0 && unbreakableHeight(flow[over].block) > pageSpace) {
+		cut = over + 1;  // a block that cannot split and is taller than a page would overflow the next page too
 	} else if (over >= 0) {
 		while (cut > 0 && flow[cut - 1].article === overArticle && overArticle && getComputedStyle(flow[cut - 1].block).breakAfter === "avoid")
 			cut--;
 
 		if (cut === 0)
 			cut = over || 1;
+	}
 
-		if (cut >= flow.length && keptNotes == items.length)
-			return null;  // a single block taller than a page stays where it is
+	if (!carry && keptNotes == items.length && flow.slice(cut).every(f => f.article && isBlank(f.block))) {
+		hideBlankOverflow(flow, limitY);
+		return null;
 	}
 
 	const moved = new Map<HTMLElement, HTMLElement[]>();
@@ -344,6 +344,26 @@ function showHeaderFooter(page: HTMLElement, number: number) {
 				c.style.display = c === pick ? "" : "none";
 		}
 	}
+}
+
+function hideBlankOverflow(flow: { block: HTMLElement, article: HTMLElement }[], limitY: number) {
+	for (const f of flow) {
+		if (f.article && isBlank(f.block) && f.block.getBoundingClientRect().bottom > limitY)
+			f.block.style.display = "none";
+	}
+}
+
+/** Height of the leading part of a block that cannot be split off: a table's header and first body row, a whole paragraph kept together, or the whole of any other block. */
+function unbreakableHeight(block: HTMLElement): number {
+	if (block instanceof HTMLTableElement) {
+		const first = Array.from(block.rows).find(r => r.parentElement !== block.tHead);
+		return first ? first.getBoundingClientRect().bottom - block.getBoundingClientRect().top : 0;
+	}
+
+	if (block.tagName === "P" && getComputedStyle(block).breakInside !== "avoid")
+		return 0;
+
+	return outerHeight(block);
 }
 
 function outerHeight(el: HTMLElement): number {
