@@ -564,9 +564,9 @@ section.${c}>article { margin-bottom: auto; z-index: 1; }
 section.${c}>footer { z-index: 1; }
 .${c} table { border-collapse: collapse; }
 .${c} table td, .${c} table th { vertical-align: top; }
-.${c} p { margin: 0pt; min-height: 1em; }
+.${c} p { margin: 0pt; min-height: 1em; --docx-run-line-height: initial; }
 .${c} p.${c}-continued::before { content: none; }
-.${c} span { white-space: pre-wrap; overflow-wrap: break-word; }
+.${c} span { white-space: pre-wrap; overflow-wrap: break-word; line-height: var(--docx-run-line-height, inherit); }
 .${c} a { color: inherit; text-decoration: inherit; }
 .${c} svg { fill: transparent; }
 `;
