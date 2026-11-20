@@ -3661,6 +3661,17 @@ function mergeTabs(base, own) {
     const samePos = (a, b) => Math.abs(lengthToPoint(a.position) - lengthToPoint(b.position)) < posTolerance;
     return [...base.filter(b => !own.some(o => samePos(o, b))), ...own];
 }
+function cloneWithTabStops(source) {
+    const copy = source.cloneNode(true);
+    const originals = source.querySelectorAll("span");
+    const copies = copy.querySelectorAll("span");
+    originals.forEach((span, i) => {
+        const registration = registered.get(span);
+        if (registration)
+            registered.set(copies[i], registration);
+    });
+    return copy;
+}
 function remeasureTabStops(root, className = "docx") {
     measureTabSpans(Array.from(root.querySelectorAll(`.${className}-tab-stop`)));
 }
@@ -5401,7 +5412,7 @@ function splitPage(page, className = "docx") {
     next.removeAttribute("data-page-start");
     for (const c of children) {
         if (c.tagName === "HEADER" && c.dataset.docxHf !== "first")
-            next.appendChild(c.cloneNode(true));
+            next.appendChild(cloneWithTabStops(c));
     }
     for (const [article, blocks] of moved) {
         if (article !== overArticle || !carry && blocks[0] === article.firstElementChild) {
@@ -5416,7 +5427,7 @@ function splitPage(page, className = "docx") {
     next.append(...notes);
     for (const c of children) {
         if (c.tagName === "FOOTER" && c.dataset.docxHf !== "first")
-            next.appendChild(c.cloneNode(true));
+            next.appendChild(cloneWithTabStops(c));
     }
     page.after(next);
     return next;
@@ -5465,7 +5476,7 @@ function splitTable(table, limitY) {
             rest.appendChild(c.cloneNode(true));
         }
         else if (c === head) {
-            const copy = head.cloneNode(true);
+            const copy = cloneWithTabStops(head);
             copy.setAttribute("data-docx-repeat", "");
             clampRowSpans(Array.from(copy.rows), copy.rows.length);
             rest.appendChild(copy);
