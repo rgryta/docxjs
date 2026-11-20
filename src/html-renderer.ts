@@ -1055,7 +1055,6 @@ section.${c}>footer { z-index: 1; }
 	}
 
 	renderParagraph(elem: WmlParagraph) {
-		// Direct keep-with-next / keep-lines formatting (the style variants come from the style rules).
 		if (elem.keepNext != null)
 			(elem.cssStyle ??= {})["break-after"] = elem.keepNext ? "avoid" : "auto";
 
