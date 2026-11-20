@@ -13,7 +13,8 @@ import { parseBookmarkEnd, parseBookmarkStart } from './document/bookmarks';
 import { IDomStyle, IDomSubStyle } from './document/style';
 import { WmlFieldChar, WmlFieldSimple, WmlInstructionText } from './document/fields';
 import { convertLength, LengthUsage, LengthUsageType } from './document/common';
-import { parseVmlElement, VmlShapeType } from './vml/vml';
+import { notDrawn, parseVmlElement, VmlShapeType } from './vml/vml';
+import { canDrawChoice, DmlShape, isDrawableShape, parseShape, parseShapeDrawing } from './drawing/shape';
 import { WmlComment, WmlCommentRangeEnd, WmlCommentRangeStart, WmlCommentReference } from './comments/elements';
 import { encloseFontFamily } from './utils';
 
@@ -23,8 +24,6 @@ export var autos = {
 	borderColor: "black",
 	highlight: "transparent"
 };
-
-const supportedNamespaceURIs = [];
 
 const mmlTagMap = {
 	"oMath": DomType.MmlMath,
@@ -62,6 +61,7 @@ export interface DocumentParserOptions {
 export class DocumentParser {
 	options: DocumentParserOptions;
 	vmlShapeTypes = new Map<string, VmlShapeType>();
+	textBoxDepth = 0;
 
 	constructor(options?: Partial<DocumentParserOptions>) {
 		this.options = {
@@ -126,6 +126,19 @@ export class DocumentParser {
 		}
 
 		return result;
+	}
+
+	parseTextBoxContent(element: Element): OpenXmlElement[] {
+		if (this.textBoxDepth >= 16)
+			return null;
+
+		this.textBoxDepth++;
+
+		try {
+			return this.parseBodyElements(element);
+		} finally {
+			this.textBoxDepth--;
+		}
 	}
 
 	parseBodyElements(element: Element): OpenXmlElement[] {
@@ -743,6 +756,9 @@ export class DocumentParser {
 					this.parseRunProperties(c, result);
 					break;
 			}
+
+			if (c !== child && (!c || c.nextElementSibling))
+				result.children.push(notDrawn("alternate"));
 		}
 
 		return result;
@@ -820,15 +836,10 @@ export class DocumentParser {
 		if (elem.localName != 'AlternateContent')
 			return elem;
 
-		var choice = xml.element(elem, "Choice");
+		const choice = xml.element(elem, "Choice");
 
-		if (choice) {
-			var requires = xml.attr(choice, "Requires");
-			var namespaceURI = elem.lookupNamespaceURI(requires);
-
-			if (supportedNamespaceURIs.includes(namespaceURI))
-				return choice.firstElementChild;
-		}
+		if (choice && canDrawChoice(choice))
+			return choice.firstElementChild;
 
 		return xml.element(elem, "Fallback")?.firstElementChild;
 	}
@@ -908,6 +919,9 @@ export class DocumentParser {
 			}
 		}
 
+		if (g?.type == DomType.Shape)
+			return parseShapeDrawing(node, g as DmlShape, this.textBoxDepth > 0);
+
 		if (wrapType == "wrapTopAndBottom") {
 			result.cssStyle['display'] = 'block';
 
@@ -937,14 +951,17 @@ export class DocumentParser {
 	parseGraphic(elem: Element): OpenXmlElement {
 		var graphicData = xml.element(elem, "graphicData");
 
-		for (let n of xml.elements(graphicData)) {
+		for (let n of graphicData ? xml.elements(graphicData) : []) {
 			switch (n.localName) {
 				case "pic":
 					return this.parsePicture(n);
+
+				case "wsp":
+					return isDrawableShape(n) ? parseShape(n, this) : notDrawn("graphic");
 			}
 		}
 
-		return null;
+		return notDrawn("graphic");
 	}
 
 	parsePicture(elem: Element): IDomImage {
