@@ -142,8 +142,16 @@ function parsePageNumber(elem: Element, xml: XmlParser): PageNumber {
         chapSep: xml.attr(elem, "chapSep"),
         chapStyle: xml.attr(elem, "chapStyle"),
         format: xml.attr(elem, "fmt"),
-        start: xml.intAttr(elem, "start")
+        start: parsePageStart(xml.attr(elem, "start"))
     };
+}
+
+function parsePageStart(value: string): number {
+    if (value == null)
+        return null;
+
+    const start = Number(value);
+    return value.trim() && Number.isInteger(start) && start >= 0 ? start : 1;
 }
 
 function parseFooterHeaderReference(elem: Element, xml: XmlParser): FooterHeaderReference {
