@@ -769,6 +769,7 @@ var DomType;
     DomType["MmlBar"] = "mmlBar";
     DomType["MmlGroupChar"] = "mmlGroupChar";
     DomType["VmlElement"] = "vmlElement";
+    DomType["Shape"] = "shape";
     DomType["Inserted"] = "inserted";
     DomType["Deleted"] = "deleted";
     DomType["DeletedText"] = "deletedText";
@@ -907,6 +908,9 @@ class CorePropsPart extends Part {
 }
 
 class DmlTheme {
+    constructor() {
+        this.lineWidths = [];
+    }
 }
 function parseTheme(elem, xml) {
     var result = new DmlTheme();
@@ -918,6 +922,9 @@ function parseTheme(elem, xml) {
                 break;
             case "fontScheme":
                 result.fontScheme = parseFontScheme(el, xml);
+                break;
+            case "fmtScheme":
+                result.lineWidths = parseLineWidths(el, xml);
                 break;
         }
     }
@@ -939,6 +946,11 @@ function parseColorScheme(elem, xml) {
         }
     }
     return result;
+}
+function parseLineWidths(elem, xml) {
+    const list = xml.element(elem, "lnStyleLst");
+    const width = (ln) => xml.attr(ln, "w");
+    return list ? xml.elements(list, "ln").map(ln => /^\d{1,12}$/.test(width(ln) ?? "") ? parseInt(width(ln)) : null) : [];
 }
 function parseFontScheme(elem, xml) {
     var result = {
@@ -1289,6 +1301,7 @@ function parseVmlElement(elem, parser, watermarkAllowed = false) {
     }
     switch (elem.localName) {
         case "rect":
+        case "roundrect":
         case "oval":
         case "line":
         case "shape":
@@ -1338,7 +1351,7 @@ function parseVmlElement(elem, parser, watermarkAllowed = false) {
     const style = parseVmlStyle(globalXmlParser.attr(elem, "style"));
     result.box = parseBox(style);
     const imageId = imageData && globalXmlParser.attr(imageData, "id");
-    const paint = parsePaint(elem, shapeType, stroke, fill);
+    const paint = parsePaint$1(elem, shapeType, stroke, fill);
     if (imageId) {
         result.imageHref = { id: imageId, title: globalXmlParser.attr(imageData, "title") };
         result.parts.push({ tagName: "image", attrs: { width: "100%", height: "100%", preserveAspectRatio: "none" } });
@@ -1348,6 +1361,11 @@ function parseVmlElement(elem, parser, watermarkAllowed = false) {
             case "rect":
                 result.parts.push({ tagName: "rect", attrs: { width: "100%", height: "100%", ...paintAttrs(paint, true, true) } });
                 break;
+            case "roundrect": {
+                const radius = `${formatNumber(arcSize(globalXmlParser.attr(elem, "arcsize")) * Math.min(result.box.width ?? 0, result.box.height ?? 0))}pt`;
+                result.parts.push({ tagName: "rect", attrs: { width: "100%", height: "100%", rx: radius, ry: radius, ...paintAttrs(paint, true, true) } });
+                break;
+            }
             case "oval":
                 result.parts.push({ tagName: "ellipse", attrs: { cx: "50%", cy: "50%", rx: "50%", ry: "50%", ...paintAttrs(paint, true, true) } });
                 break;
@@ -1383,7 +1401,10 @@ function parseVmlElement(elem, parser, watermarkAllowed = false) {
     if (textBox) {
         result.textBox = parseTextBox(textBox, style.get("v-text-anchor"));
         const content = globalXmlParser.element(textBox, "txbxContent");
-        content && result.children.push(...parser.parseBodyElements(content));
+        const children = content ? parser.parseTextBoxContent(content) : [];
+        if (!children)
+            return notDrawn("depth");
+        result.children.push(...children);
     }
     return result;
 }
@@ -1493,13 +1514,22 @@ function parseLine(elem, box, paint) {
         }
     };
 }
+function arcSize(value) {
+    const text = value?.trim() ?? "";
+    const fixed = /^(\d+)f$/.exec(text);
+    const percent = /^(\d+\.?\d*|\.\d+)%$/.exec(text);
+    const size = fixed ? parseInt(fixed[1]) / 65536
+        : percent ? parseFloat(percent[1]) / 100
+            : /^(\d+\.?\d*|\.\d+)$/.test(text) ? parseFloat(text) : 0.2;
+    return clamp(size, 0, 0.5);
+}
 function parseViewBox(coordsize, coordorigin) {
     const integer = (part) => /^-?\d+$/.test(part?.trim() ?? "") ? parseInt(part) : null;
     const size = (coordsize ?? "1000,1000").split(",").map(integer);
     const origin = (coordorigin ?? "").split(",").map(integer);
     return [origin[0] ?? 0, origin[1] ?? 0, size[0] > 0 ? size[0] : 1, size[1] > 0 ? size[1] : 1].join(" ");
 }
-const textAnchor = { top: "flex-start", middle: "center", bottom: "flex-end" };
+const textAnchor$1 = { top: "flex-start", middle: "center", bottom: "flex-end" };
 const defaultInset = ["7.2pt", "3.6pt", "7.2pt", "3.6pt"];
 function parseTextBox(elem, anchor) {
     const parts = (globalXmlParser.attr(elem, "inset") ?? "").split(",");
@@ -1509,7 +1539,7 @@ function parseTextBox(elem, anchor) {
     });
     return {
         padding: [top, right, bottom, left],
-        justify: textAnchor[anchor?.split("-")[0]] ?? "flex-start",
+        justify: textAnchor$1[anchor?.split("-")[0]] ?? "flex-start",
     };
 }
 const trueValues = new Set(["t", "true", "1", "yes", "on"]);
@@ -1555,7 +1585,7 @@ const dashPatterns = {
     shortdashdotdot: [3, 1, 1, 1, 1, 1],
     longdashdotdot: [8, 3, 1, 3, 1, 3],
 };
-function parsePaint(elem, shapeType, stroke, fill) {
+function parsePaint$1(elem, shapeType, stroke, fill) {
     const filled = vmlBool(globalXmlParser.attr(elem, "filled") ?? shapeType.filled, true) && vmlBool(fill && globalXmlParser.attr(fill, "on"), true);
     const stroked = vmlBool(globalXmlParser.attr(elem, "stroked") ?? shapeType.stroked, true) && vmlBool(stroke && globalXmlParser.attr(stroke, "on"), true);
     const strokeColor = (stroke && globalXmlParser.attr(stroke, "color")) ?? globalXmlParser.attr(elem, "strokecolor") ?? shapeType.strokecolor ?? "black";
@@ -1691,6 +1721,228 @@ function parseVmlPath(text) {
     return drawn.length ? drawn.map(s => ({ d: s.d.join(" "), filled: s.filled, stroked: s.stroked })) : null;
 }
 
+const shapeNamespace = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
+const drawnPresets = new Set(["rect", "roundRect", "ellipse", "line"]);
+const maxEmu = 1e12;
+class DmlShape extends OpenXmlElementBase {
+    constructor() {
+        super(...arguments);
+        this.type = DomType.Shape;
+    }
+}
+function integer(text) {
+    const value = /^-?\d+$/.test(text?.trim() ?? "") ? parseInt(text) : NaN;
+    return Math.abs(value) <= maxEmu ? value : null;
+}
+function emuPoints(text) {
+    const value = integer(text);
+    return value == null ? null : value / 12700;
+}
+const descendant = (root, localName) => Array.from(root.getElementsByTagNameNS("*", localName));
+function isDrawableShape(wsp) {
+    const spPr = globalXmlParser.element(wsp, "spPr");
+    const prst = spPr && globalXmlParser.elementAttr(spPr, "prstGeom", "prst");
+    const bodyPr = globalXmlParser.element(wsp, "bodyPr");
+    const warp = bodyPr && globalXmlParser.element(bodyPr, "prstTxWarp");
+    return drawnPresets.has(prst)
+        && !globalXmlParser.element(spPr, "custGeom")
+        && ["gradFill", "pattFill", "blipFill"].every(name => !descendant(spPr, name).length)
+        && !globalXmlParser.element(wsp, "linkedTxbx")
+        && (!bodyPr || (globalXmlParser.attr(bodyPr, "vert") ?? "horz") == "horz" && !globalXmlParser.boolAttr(bodyPr, "fromWordArt", false))
+        && (!warp || globalXmlParser.attr(warp, "prst") == "textNoShape")
+        && (prst != "line" || ["headEnd", "tailEnd"].every(name => descendant(spPr, name).every(end => (globalXmlParser.attr(end, "type") ?? "none") == "none")));
+}
+function canDrawChoice(choice) {
+    const requires = globalXmlParser.attr(choice, "Requires");
+    const children = globalXmlParser.elements(choice);
+    return !!requires
+        && requires.split(" ").every(prefix => prefix && choice.lookupNamespaceURI(prefix) == shapeNamespace)
+        && children.length > 0
+        && children.every(child => child.localName == "drawing" && drawsShapes(child));
+}
+function drawsShapes(drawing) {
+    const wrapper = globalXmlParser.elements(drawing).find(n => n.localName == "inline" || n.localName == "anchor");
+    const graphic = wrapper && globalXmlParser.element(wrapper, "graphic");
+    const graphicData = graphic && globalXmlParser.element(graphic, "graphicData");
+    const shapes = graphicData ? globalXmlParser.elements(graphicData) : [];
+    return shapes.length > 0 && shapes.every(s => s.namespaceURI == shapeNamespace && s.localName == "wsp" && isDrawableShape(s));
+}
+function parseShape(wsp, parser) {
+    const spPr = globalXmlParser.element(wsp, "spPr");
+    const geometry = globalXmlParser.element(spPr, "prstGeom");
+    const xfrm = globalXmlParser.element(spPr, "xfrm");
+    const ext = xfrm && globalXmlParser.element(xfrm, "ext");
+    const ln = globalXmlParser.element(spPr, "ln");
+    const style = globalXmlParser.element(wsp, "style");
+    const bodyPr = globalXmlParser.element(wsp, "bodyPr");
+    const txbx = globalXmlParser.element(wsp, "txbx");
+    const content = txbx && globalXmlParser.element(txbx, "txbxContent");
+    const result = new DmlShape();
+    result.geometry = globalXmlParser.attr(geometry, "prst");
+    result.radius = adjustment(geometry);
+    result.width = ext ? emuPoints(globalXmlParser.attr(ext, "cx")) : null;
+    result.height = ext ? emuPoints(globalXmlParser.attr(ext, "cy")) : null;
+    result.rotation = ((xfrm && integer(globalXmlParser.attr(xfrm, "rot"))) ?? 0) % 21600000 / 60000;
+    result.flipH = !!xfrm && globalXmlParser.boolAttr(xfrm, "flipH", false);
+    result.flipV = !!xfrm && globalXmlParser.boolAttr(xfrm, "flipV", false);
+    result.fill = parsePaint(spPr);
+    result.line = { width: ln ? emuPoints(globalXmlParser.attr(ln, "w")) : null, fill: parsePaint(ln), dash: ln && globalXmlParser.elementAttr(ln, "prstDash", "val") };
+    result.fillRef = parseStyleRef(style, "fillRef");
+    result.lnRef = parseStyleRef(style, "lnRef");
+    result.fontRef = parseStyleRef(style, "fontRef");
+    result.autoFit = !!bodyPr && !!globalXmlParser.element(bodyPr, "spAutoFit");
+    if (content) {
+        const children = parser.parseTextBoxContent(content);
+        if (!children)
+            return notDrawn("depth");
+        result.children = children;
+        result.textBox = parseBodyProps(bodyPr);
+    }
+    return result;
+}
+function adjustment(geometry) {
+    const list = globalXmlParser.element(geometry, "avLst");
+    const guide = list && globalXmlParser.elements(list, "gd").find(gd => globalXmlParser.attr(gd, "name") == "adj");
+    const match = /^val (-?\d+)$/.exec((guide && globalXmlParser.attr(guide, "fmla")) ?? "");
+    return clamp(match ? parseInt(match[1]) : 16667, 0, 50000) / 100000;
+}
+const textAnchor = new Map([["t", "flex-start"], ["ctr", "center"], ["b", "flex-end"]]);
+function parseBodyProps(bodyPr) {
+    const inset = (name, fallback) => `${formatNumber(Math.max(0, (bodyPr && integer(globalXmlParser.attr(bodyPr, name))) ?? fallback) / 12700)}pt`;
+    return {
+        padding: [inset("tIns", 45720), inset("rIns", 91440), inset("bIns", 45720), inset("lIns", 91440)],
+        justify: textAnchor.get(bodyPr && globalXmlParser.attr(bodyPr, "anchor")) ?? "flex-start",
+    };
+}
+const colorAttrs = {
+    srgbClr: ["val"], schemeClr: ["val"], sysClr: ["lastClr"], prstClr: ["val"], scrgbClr: ["r", "g", "b"], hslClr: ["hue", "sat", "lum"],
+};
+function parseColor(parent) {
+    const el = globalXmlParser.elements(parent).find(e => Object.prototype.hasOwnProperty.call(colorAttrs, e.localName));
+    return el ? {
+        kind: el.localName,
+        values: colorAttrs[el.localName].map(name => globalXmlParser.attr(el, name)),
+        mods: globalXmlParser.elements(el).map(mod => [mod.localName, globalXmlParser.attr(mod, "val")]),
+    } : null;
+}
+function parsePaint(parent) {
+    if (!parent || globalXmlParser.element(parent, "noFill"))
+        return parent ? null : undefined;
+    const solid = globalXmlParser.element(parent, "solidFill");
+    return solid ? parseColor(solid) ?? { kind: "", values: [], mods: [] } : undefined;
+}
+function parseStyleRef(style, name) {
+    const ref = style && globalXmlParser.element(style, name);
+    return ref ? { idx: integer(globalXmlParser.attr(ref, "idx")), color: parseColor(ref) } : null;
+}
+function parseShapeDrawing(node, shape, nested) {
+    const docPr = globalXmlParser.element(node, "docPr");
+    if (docPr && globalXmlParser.boolAttr(docPr, "hidden", false))
+        return null;
+    const extent = globalXmlParser.element(node, "extent");
+    const simplePos = globalXmlParser.boolAttr(node, "simplePos", false) && globalXmlParser.element(node, "simplePos");
+    const axis = (name) => {
+        const el = globalXmlParser.element(node, name);
+        const align = el && globalXmlParser.element(el, "align");
+        const offset = el && globalXmlParser.element(el, "posOffset");
+        return el ? { relative: globalXmlParser.attr(el, "relativeFrom"), align: align?.textContent.trim(), offset: offset ? emuPoints(offset.textContent) : undefined } : {};
+    };
+    return {
+        type: DomType.Drawing,
+        children: [shape],
+        anchor: {
+            inline: node.localName == "inline",
+            nested,
+            wrap: globalXmlParser.elements(node).find(n => n.localName.startsWith("wrap"))?.localName,
+            behindDoc: globalXmlParser.boolAttr(node, "behindDoc", false),
+            width: extent ? emuPoints(globalXmlParser.attr(extent, "cx")) : null,
+            height: extent ? emuPoints(globalXmlParser.attr(extent, "cy")) : null,
+            h: simplePos ? { relative: "page", offset: emuPoints(globalXmlParser.attr(simplePos, "x")) } : axis("positionH"),
+            v: simplePos ? { relative: "page", offset: emuPoints(globalXmlParser.attr(simplePos, "y")) } : axis("positionV"),
+        }
+    };
+}
+const hex6 = /^[0-9A-Fa-f]{6}$/;
+const schemeAliases = new Map([["bg1", "lt1"], ["tx1", "dk1"], ["bg2", "lt2"], ["tx2", "dk2"]]);
+const modifiers = new Set(["lumMod", "lumOff", "satMod", "shade", "tint", "alpha"]);
+function resolveColor(spec, theme, placeholder = null) {
+    const color = spec.kind == "schemeClr" && spec.values[0] == "phClr"
+        ? placeholder && { ...placeholder }
+        : baseColor(spec, theme);
+    if (!color)
+        return null;
+    for (const [name, value] of spec.mods) {
+        if (!modifiers.has(name))
+            continue;
+        if (!/^-?\d+$/.test(value ?? "") || name != "alpha" && !color.rgb)
+            return null;
+        const amount = parseInt(value) / 100000;
+        if (name == "alpha")
+            color.alpha = clamp(amount, 0, 1);
+        else
+            color.rgb = modify(color.rgb, name, amount);
+    }
+    return color;
+}
+function baseColor(spec, theme) {
+    const [first] = spec.values;
+    const numbers = spec.values.map(integer);
+    switch (spec.kind) {
+        case "srgbClr":
+        case "sysClr":
+            return rgbColor(hexRgb(first));
+        case "schemeClr":
+            return rgbColor(hexRgb(theme?.colorScheme?.colors[schemeAliases.get(first) ?? first]));
+        case "prstClr": {
+            const name = first?.toLowerCase().replace(/^dk/, "dark").replace(/^lt/, "light").replace(/^med/, "medium");
+            return namedColors.has(name) ? { name, alpha: 1 } : null;
+        }
+        case "scrgbClr":
+            return numbers.every(n => n != null) ? rgbColor(numbers.map(n => toGamma(clamp(n / 100000, 0, 1)))) : null;
+        case "hslClr":
+            return numbers.every(n => n != null)
+                ? rgbColor(fromHsl([(numbers[0] / 21600000 % 1 + 1) % 1, clamp(numbers[1] / 100000, 0, 1), clamp(numbers[2] / 100000, 0, 1)]))
+                : null;
+    }
+    return null;
+}
+function rgbColor(rgb) {
+    return rgb ? { rgb, alpha: 1 } : null;
+}
+function hexRgb(value) {
+    return typeof value == "string" && hex6.test(value) ? [0, 2, 4].map(i => parseInt(value.substring(i, i + 2), 16) / 255) : null;
+}
+function formatColor(color) {
+    return color.name ?? `#${color.rgb.map(c => Math.round(clamp(c, 0, 1) * 255).toString(16).padStart(2, "0")).join("")}`;
+}
+function modify(rgb, name, amount) {
+    if (name == "shade")
+        return rgb.map(c => toGamma(clamp(toLinear(c) * amount, 0, 1)));
+    if (name == "tint")
+        return rgb.map(c => toGamma(clamp(1 - (1 - toLinear(c)) * amount, 0, 1)));
+    const [h, s, l] = toHsl(rgb);
+    switch (name) {
+        case "lumMod": return fromHsl([h, s, clamp(l * amount, 0, 1)]);
+        case "lumOff": return fromHsl([h, s, clamp(l + amount, 0, 1)]);
+        default: return fromHsl([h, clamp(s * amount, 0, 1), l]);
+    }
+}
+const toLinear = (c) => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+const toGamma = (c) => c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055;
+function toHsl([r, g, b]) {
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const l = (max + min) / 2, d = max - min;
+    if (!d)
+        return [0, 0, l];
+    const h = max == r ? (g - b) / d + (g < b ? 6 : 0) : max == g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [h / 6, d / (1 - Math.abs(2 * l - 1)), l];
+}
+function fromHsl([h, s, l]) {
+    const a = s * Math.min(l, 1 - l);
+    const k = (n) => (n + h * 12) % 12;
+    return [0, 8, 4].map(n => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1)));
+}
+
 class WmlComment extends OpenXmlElementBase {
     constructor() {
         super(...arguments);
@@ -1725,7 +1977,6 @@ var autos = {
     borderColor: "black",
     highlight: "transparent"
 };
-const supportedNamespaceURIs = [];
 const mmlTagMap = {
     "oMath": DomType.MmlMath,
     "oMathPara": DomType.MmlMathParagraph,
@@ -1756,6 +2007,7 @@ const mmlTagMap = {
 class DocumentParser {
     constructor(options) {
         this.vmlShapeTypes = new Map();
+        this.textBoxDepth = 0;
         this.options = {
             ignoreWidth: false,
             debug: false,
@@ -1807,6 +2059,17 @@ class DocumentParser {
             result["background-color"] = color;
         }
         return result;
+    }
+    parseTextBoxContent(element) {
+        if (this.textBoxDepth >= 16)
+            return null;
+        this.textBoxDepth++;
+        try {
+            return this.parseBodyElements(element);
+        }
+        finally {
+            this.textBoxDepth--;
+        }
     }
     parseBodyElements(element) {
         var children = [];
@@ -2316,6 +2579,8 @@ class DocumentParser {
                     this.parseRunProperties(c, result);
                     break;
             }
+            if (c !== child && (!c || c.nextElementSibling))
+                result.children.push(notDrawn("alternate"));
         }
         return result;
     }
@@ -2390,13 +2655,9 @@ class DocumentParser {
     checkAlternateContent(elem) {
         if (elem.localName != 'AlternateContent')
             return elem;
-        var choice = globalXmlParser.element(elem, "Choice");
-        if (choice) {
-            var requires = globalXmlParser.attr(choice, "Requires");
-            var namespaceURI = elem.lookupNamespaceURI(requires);
-            if (supportedNamespaceURIs.includes(namespaceURI))
-                return choice.firstElementChild;
-        }
+        const choice = globalXmlParser.element(elem, "Choice");
+        if (choice && canDrawChoice(choice))
+            return choice.firstElementChild;
         return globalXmlParser.element(elem, "Fallback")?.firstElementChild;
     }
     parseDrawing(node) {
@@ -2454,6 +2715,8 @@ class DocumentParser {
                     break;
             }
         }
+        if (g?.type == DomType.Shape)
+            return parseShapeDrawing(node, g, this.textBoxDepth > 0);
         if (wrapType == "wrapTopAndBottom") {
             result.cssStyle['display'] = 'block';
             if (posX.align) {
@@ -2478,13 +2741,15 @@ class DocumentParser {
     }
     parseGraphic(elem) {
         var graphicData = globalXmlParser.element(elem, "graphicData");
-        for (let n of globalXmlParser.elements(graphicData)) {
+        for (let n of graphicData ? globalXmlParser.elements(graphicData) : []) {
             switch (n.localName) {
                 case "pic":
                     return this.parsePicture(n);
+                case "wsp":
+                    return isDrawableShape(n) ? parseShape(n, this) : notDrawn("graphic");
             }
         }
-        return null;
+        return notDrawn("graphic");
     }
     parsePicture(elem) {
         var result = { type: DomType.Image, src: "", cssStyle: {} };
@@ -3318,6 +3583,28 @@ function cx(...classNames) {
     return classNames.filter(Boolean).join(" ");
 }
 
+const pageWidth = "var(--docx-page-width, 100%)";
+const pageHeight = "var(--docx-page-height, 100%)";
+const marginLeft = "var(--docx-margin-left, 0pt)";
+const marginRight = "var(--docx-margin-right, 0pt)";
+const marginTop = "var(--docx-margin-top, 0pt)";
+const marginBottom = "var(--docx-margin-bottom, 0pt)";
+const textColumn = [marginLeft, `(${pageWidth} - ${marginLeft} - ${marginRight})`];
+const horizontalFrames = {
+    page: ["0pt", pageWidth],
+    margin: textColumn,
+    column: textColumn,
+    leftMargin: ["0pt", marginLeft],
+    rightMargin: [`(${pageWidth} - ${marginRight})`, marginRight],
+};
+const verticalFrames = {
+    page: ["0pt", pageHeight],
+    margin: [marginTop, `(${pageHeight} - ${marginTop} - ${marginBottom})`],
+    topMargin: ["0pt", marginTop],
+    bottomMargin: [`(${pageHeight} - ${marginBottom})`, marginBottom],
+};
+const hasOwn = (record, key) => key != null && Object.prototype.hasOwnProperty.call(record, key);
+const pt = (value) => `${formatNumber(value)}pt`;
 class HtmlRenderer {
     constructor() {
         this.className = "docx";
@@ -4031,6 +4318,8 @@ section.${c}>footer { z-index: 1; }
         return result;
     }
     renderDrawing(elem) {
+        if (elem.anchor)
+            return this.renderShapeDrawing(elem);
         var result = this.toHTML(elem, ns.html, "div");
         result.style.display = "inline-block";
         result.style.position = "relative";
@@ -4177,40 +4466,8 @@ section.${c}>footer { z-index: 1; }
         }
         const box = this.h({ tagName: "span" });
         this.placeVmlBox(elem, box.style);
-        const svg = this.createSvgElement("svg");
         const sizeless = !!elem.imageHref && elem.box.width == null && elem.box.height == null;
-        if (!sizeless) {
-            for (const [key, value] of [["position", "absolute"], ["inset", "0"], ["width", "100%"], ["height", "100%"], ["overflow", "visible"]])
-                svg.style.setProperty(key, value);
-        }
-        if (elem.viewBox) {
-            svg.setAttribute("viewBox", elem.viewBox);
-            svg.setAttribute("preserveAspectRatio", "none");
-        }
-        if (elem.flip)
-            svg.style.setProperty("transform", elem.flip);
-        for (const part of elem.parts) {
-            const node = this.createSvgElement(part.tagName);
-            Object.entries(part.attrs).forEach(([k, v]) => node.setAttribute(k, v));
-            if (part.tagName == "image" && elem.imageHref?.id) {
-                this.tasks.push(this.document?.loadDocumentImage(elem.imageHref.id, this.currentPart)
-                    .then(x => node.setAttribute("href", x)));
-            }
-            svg.appendChild(node);
-        }
-        box.appendChild(svg);
-        if (elem.textBox) {
-            const text = this.h({ tagName: "div" });
-            const [top, right, bottom, left] = elem.textBox.padding;
-            const textStyle = {
-                "position": "relative", "min-height": "100%", "box-sizing": "border-box",
-                "padding-top": top, "padding-right": right, "padding-bottom": bottom, "padding-left": left,
-                "display": "flex", "flex-direction": "column", "justify-content": elem.textBox.justify,
-            };
-            Object.entries(textStyle).forEach(([k, v]) => text.style.setProperty(k, v));
-            this.renderElements(elem.children, text);
-            box.appendChild(text);
-        }
+        const svg = this.renderShape(box, elem, !sizeless);
         if (sizeless) {
             requestAnimationFrame(() => {
                 try {
@@ -4224,9 +4481,147 @@ section.${c}>footer { z-index: 1; }
         }
         return box;
     }
+    renderShape(box, shape, fitted, textColor = null) {
+        box.style.setProperty("pointer-events", "none");
+        const svg = this.createSvgElement("svg");
+        if (fitted) {
+            for (const [key, value] of [["position", "absolute"], ["inset", "0"], ["width", "100%"], ["height", "100%"], ["overflow", "visible"]])
+                svg.style.setProperty(key, value);
+        }
+        if (shape.viewBox) {
+            svg.setAttribute("viewBox", shape.viewBox);
+            svg.setAttribute("preserveAspectRatio", "none");
+        }
+        if (shape.flip)
+            svg.style.setProperty("transform", shape.flip);
+        for (const part of shape.parts) {
+            const node = this.createSvgElement(part.tagName);
+            Object.entries(part.attrs).forEach(([k, v]) => node.setAttribute(k, v));
+            if (part.tagName == "image" && shape.imageHref?.id) {
+                this.tasks.push(this.document?.loadDocumentImage(shape.imageHref.id, this.currentPart)
+                    .then(x => node.setAttribute("href", x)));
+            }
+            svg.appendChild(node);
+        }
+        box.appendChild(svg);
+        if (shape.textBox) {
+            const text = this.h({ tagName: "div" });
+            const [top, right, bottom, left] = shape.textBox.padding;
+            const textStyle = {
+                "position": "relative", "min-height": "100%", "box-sizing": "border-box",
+                "padding-top": top, "padding-right": right, "padding-bottom": bottom, "padding-left": left,
+                "display": "flex", "flex-direction": "column", "justify-content": shape.textBox.justify,
+                "pointer-events": "auto",
+            };
+            Object.entries(textStyle).forEach(([k, v]) => text.style.setProperty(k, v));
+            if (textColor)
+                text.style.setProperty("color", textColor);
+            this.renderElements(shape.children, text);
+            box.appendChild(text);
+        }
+        return svg;
+    }
+    renderShapeDrawing(elem) {
+        const shape = elem.children[0];
+        const width = Math.max(0, shape.width ?? elem.anchor.width ?? 0);
+        const height = Math.max(0, shape.height ?? elem.anchor.height ?? 0);
+        if (shape.geometry != "line" && !(width > 0 && height > 0))
+            return null;
+        const theme = this.document?.themePart?.theme;
+        let partial = false;
+        const resolve = (spec, ref) => {
+            const refColor = ref?.color ? resolveColor(ref.color, theme) : null;
+            const fromRef = spec === undefined && ref?.idx > 0 && !!ref.color;
+            if (spec === null || spec === undefined && !fromRef)
+                return null;
+            const color = fromRef ? refColor : resolveColor(spec, theme, refColor);
+            partial || (partial = !color);
+            return color;
+        };
+        const fill = resolve(shape.fill, shape.fillRef);
+        const stroke = resolve(shape.line.fill, shape.lnRef);
+        const text = shape.textBox && shape.fontRef?.color ? resolve(shape.fontRef.color, null) : null;
+        const themeWidth = shape.lnRef?.idx > 0 ? theme?.lineWidths[shape.lnRef.idx - 1] : null;
+        const dashName = shape.line.dash?.toLowerCase().replace(/^lg/, "long").replace(/^sys/, "short");
+        const paint = {
+            fill: fill && formatColor(fill),
+            stroke: stroke && formatColor(stroke),
+            strokeWidth: clamp(shape.line.width ?? (themeWidth != null ? themeWidth / 12700 : 0.75), 0.25, 12),
+            dash: hasOwn(dashPatterns, dashName) ? dashPatterns[dashName] : undefined,
+        };
+        const attrs = (filled) => {
+            const result = paintAttrs(paint, filled, true);
+            if (filled && fill?.alpha < 1)
+                result["fill-opacity"] = formatNumber(fill.alpha);
+            if (stroke?.alpha < 1)
+                result["stroke-opacity"] = formatNumber(stroke.alpha);
+            return result;
+        };
+        const radius = pt(shape.radius * Math.min(width, height));
+        const parts = [
+            shape.geometry == "ellipse" ? { tagName: "ellipse", attrs: { cx: "50%", cy: "50%", rx: "50%", ry: "50%", ...attrs(true) } }
+                : shape.geometry == "line" ? { tagName: "line", attrs: { x1: "0", y1: "0", x2: "100%", y2: "100%", ...attrs(false) } }
+                    : { tagName: "rect", attrs: { width: "100%", height: "100%", ...(shape.geometry == "roundRect" ? { rx: radius, ry: radius } : {}), ...attrs(true) } }
+        ];
+        if (partial)
+            parts.push({ tagName: "g", attrs: { "data-docx-not-drawn": "partial" } });
+        const wrapper = this.h({ tagName: "div" });
+        this.placeShapeWrapper(elem.anchor, shape.autoFit, wrapper.style, elem.anchor.width ?? width, elem.anchor.height ?? height);
+        const box = this.h({ tagName: "span" });
+        const set = (key, value) => box.style.setProperty(key, value);
+        set("display", "block");
+        set("position", "relative");
+        set("width", pt(width));
+        set(shape.autoFit ? "min-height" : "height", pt(height));
+        if (!(width >= 0.75))
+            set("min-width", "1px");
+        if (!(height >= 0.75))
+            set("min-height", "1px");
+        if (shape.rotation)
+            set("transform", `rotate(${formatNumber(shape.rotation)}deg)`);
+        const flip = shape.flipH || shape.flipV ? `scale(${shape.flipH ? -1 : 1}, ${shape.flipV ? -1 : 1})` : undefined;
+        this.renderShape(box, { parts, flip, textBox: shape.textBox, children: shape.children }, true, text && formatColor(text));
+        wrapper.appendChild(box);
+        return wrapper;
+    }
+    placeShapeWrapper(anchor, autoFit, style, width, height) {
+        const set = (key, value) => style.setProperty(key, value);
+        const floating = !anchor.inline && !anchor.nested;
+        const placed = floating && anchor.wrap == "wrapNone";
+        set("display", floating && !placed ? "block" : "inline-block");
+        set("position", placed ? "absolute" : "relative");
+        set("width", pt(width));
+        set(autoFit ? "min-height" : "height", pt(height));
+        set("text-indent", "0px");
+        set("pointer-events", "none");
+        if (anchor.behindDoc)
+            set("z-index", "-1");
+        if (!floating)
+            return;
+        const left = anchorEdge(anchor.h, horizontalFrames, width);
+        const hStatic = staticOffset(anchor.h, horizontalFrames);
+        if (placed && left != null)
+            set("left", left);
+        else if (left != null)
+            set("margin-left", `calc(${left} - ${marginLeft})`);
+        else if (hStatic)
+            set("margin-left", hStatic);
+        if (!placed) {
+            if (anchor.v.offset != null)
+                set("margin-top", pt(anchor.v.offset));
+            return;
+        }
+        const top = anchorEdge(anchor.v, verticalFrames, height);
+        const vStatic = staticOffset(anchor.v, verticalFrames);
+        if (top == null && vStatic)
+            set("margin-top", vStatic);
+        else if (top != null && this.currentPart instanceof FooterPart)
+            set("bottom", `calc(${pageHeight} - ${top} - ${pt(height)})`);
+        else if (top != null)
+            set("top", top);
+    }
     placeVmlBox(elem, style) {
         const box = elem.box;
-        const pt = (value) => `${formatNumber(value)}pt`;
         const set = (key, value) => style.setProperty(key, value);
         set("display", "inline-block");
         set("position", "relative");
@@ -4467,6 +4862,24 @@ function findParent(elem, type) {
     while (parent != null && parent.type != type)
         parent = parent.parent;
     return parent;
+}
+function anchorEdge(axis, frames, extent) {
+    if (!hasOwn(frames, axis.relative))
+        return null;
+    const [base, span] = frames[axis.relative];
+    if (axis.offset !== undefined)
+        return axis.offset == null ? null : `calc(${base} + ${pt(axis.offset)})`;
+    switch (axis.align) {
+        case "left":
+        case "top": return `calc(${base})`;
+        case "center": return `calc(${base} + (${span} - ${pt(extent)}) / 2)`;
+        case "right":
+        case "bottom": return `calc(${base} + ${span} - ${pt(extent)})`;
+    }
+    return null;
+}
+function staticOffset(axis, frames) {
+    return !hasOwn(frames, axis.relative) && axis.offset != null ? pt(axis.offset) : null;
 }
 
 const defaultOptions = {
