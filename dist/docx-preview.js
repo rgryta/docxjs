@@ -4426,6 +4426,12 @@ section.${c}>footer { z-index: 1; }
                     var selector = `${style.target ?? ''}.${style.cssName}${subTarget}`;
                     if (defautStyles[style.target] == style)
                         selector = `.${this.className} ${style.target}${subTarget}, ` + selector;
+                    if (subStyle.target == "span" && (style.target == null || style.target == "p")) {
+                        const font = Object.fromEntries(Object.entries(subStyle.values).filter(([key]) => ["font-family", "font-size", "font-weight", "font-style"].includes(key)));
+                        const parentSelector = selector.split(", ").map(s => s.replace(/ span$/, "")).join(", ");
+                        if (Object.keys(font).length)
+                            styleText += this.styleToString(parentSelector, font);
+                    }
                     styleText += this.styleToString(selector, subStyle.values);
                 }
             }
