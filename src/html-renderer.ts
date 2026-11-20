@@ -13,9 +13,10 @@ import { WmlParagraph } from './document/paragraph';
 import { asArray, encloseFontFamily, escapeClassName, isString, keyBy, mergeDeep } from './utils';
 import { measureTabSpans, mergeTabs, registerTabStop } from './javascript';
 import { FontTablePart } from './font-table/font-table';
-import { FooterHeaderReference, SectionProperties } from './document/section';
+import { FooterHeaderReference, SectionProperties, SectionType } from './document/section';
 import { WmlRun } from './document/run';
 import { WmlBookmarkStart } from './document/bookmarks';
+import { WmlFieldResult } from './document/fields';
 import { IDomStyle } from './document/style';
 import { WmlBaseNote, WmlFootnote } from './notes/elements';
 import { ThemePart } from './theme/theme-part';
@@ -338,6 +339,13 @@ export class HtmlRenderer {
 			const section = pages[i][0];
 			let props = section.sectProps;
 			const pageElement = this.createPageElement(this.className, props, document.cssStyle);
+			const pageNumber = props?.pageNumber;
+
+			if (pageNumber?.start != null && prevProps != props && props.type != SectionType.Continuous && props.type != SectionType.NextColumn)
+				pageElement.setAttribute("data-page-start", String(pageNumber.start));
+
+			if (pageNumber?.chapStyle || pageNumber?.format && pageNumber.format != "decimal")
+				pageElement.setAttribute("data-page-format", "other");
 
 			this.options.renderHeaders && this.renderHeaderFooter(props.headerRefs, props,
 				result.length, prevProps != props, pageElement);
@@ -377,9 +385,16 @@ export class HtmlRenderer {
 			?? (page % 2 == 1 && evenAndOddHeaders ? refs.find(x => x.type == "even") : null)
 			?? refs.find(x => x.type == "default");
 
-		var part = ref && this.document.findPartByRelId(ref.id, this.document.documentPart) as BaseHeaderFooterPart;
+		if (ref?.type == "first")
+			into.setAttribute("data-docx-first-page", "");
 
-		if (part) {
+		// The alternates are rendered hidden so paginate can show the one each split page needs.
+		for (const alt of refs.filter(x => x == ref || x.type == "default" || (x.type == "even" && evenAndOddHeaders))) {
+			var part = this.document.findPartByRelId(alt.id, this.document.documentPart) as BaseHeaderFooterPart;
+
+			if (!part)
+				continue;
+
 			this.currentPart = part;
 			if (!this.usedHederFooterParts.includes(part.path)) {
 				this.processElement(part.rootElement);
@@ -397,6 +412,11 @@ export class HtmlRenderer {
 					el.style.minHeight = `calc(${props.pageMargins.bottom} - ${props.pageMargins.footer})`;
 				}
 			}
+
+			el.setAttribute("data-docx-hf", alt.type);
+
+			if (alt != ref)
+				el.style.display = "none";
 
 			this.currentPart = null;
 		}
@@ -419,6 +439,12 @@ export class HtmlRenderer {
 		return prev.pageSize?.orientation != next.pageSize?.orientation
 			|| prev.pageSize?.width != next.pageSize?.width
 			|| prev.pageSize?.height != next.pageSize?.height;
+	}
+
+	// Word's lastRenderedPageBreak hints mark where sections start; without them the section type decides.
+	isNewPageSection(prev: SectionProperties, next: SectionProperties): boolean {
+		return this.options.ignoreLastRenderedPageBreak && prev !== next
+			&& (!next?.type || next.type == SectionType.NextPage || next.type == SectionType.EvenPage || next.type == SectionType.OddPage);
 	}
 
 	splitBySection(elements: OpenXmlElement[], defaultProps: SectionProperties): Section[] {
@@ -495,18 +521,24 @@ export class HtmlRenderer {
 		return result;
 	}
 
+	/** Groups the pieces into pages; each boundary between non-empty pieces ends at most one page, and empty pieces never start one. */
 	groupByPageBreaks(sections: Section[]): Section[][] {
-		let current = [];
-		let prev: SectionProperties;
+		let current: Section[] = [];
+		let prev: Section = null;
+		let pageBreak = false;
 		const result: Section[][] = [current];
 
 		for (let s of sections) {
+			if (s.elements.length) {
+				if (prev && (pageBreak || this.isPageBreakSection(prev.sectProps, s.sectProps) || this.isNewPageSection(prev.sectProps, s.sectProps)))
+					result.push(current = []);
+
+				prev = s;
+				pageBreak = false;
+			}
+
 			current.push(s);
-
-			if (this.options.ignoreLastRenderedPageBreak || s.pageBreak || this.isPageBreakSection(prev, s.sectProps))
-				result.push(current = []);
-
-			prev = s.sectProps;
+			pageBreak ||= s.pageBreak;
 		}
 
 		return result.filter(x => x.length > 0);
@@ -532,6 +564,7 @@ section.${c}>footer { z-index: 1; }
 .${c} table { border-collapse: collapse; }
 .${c} table td, .${c} table th { vertical-align: top; }
 .${c} p { margin: 0pt; min-height: 1em; }
+.${c} p.${c}-continued::before { content: none; }
 .${c} span { white-space: pre-wrap; overflow-wrap: break-word; }
 .${c} a { color: inherit; text-decoration: inherit; }
 .${c} svg { fill: transparent; }
@@ -741,6 +774,9 @@ section.${c}>footer { z-index: 1; }
 			case DomType.Run:
 				return this.renderRun(elem as WmlRun);
 
+			case DomType.FieldResult:
+				return this.renderFieldResult(elem as WmlFieldResult);
+
 			case DomType.Table:
 				return this.renderTable(elem);
 
@@ -914,6 +950,12 @@ section.${c}>footer { z-index: 1; }
 	}
 
 	renderParagraph(elem: WmlParagraph) {
+		if (elem.keepNext != null)
+			(elem.cssStyle ??= {})["break-after"] = elem.keepNext ? "avoid" : "auto";
+
+		if (elem.keepLines != null)
+			(elem.cssStyle ??= {})["break-inside"] = elem.keepLines ? "avoid" : "auto";
+
 		const style = this.findStyle(elem.styleName);
 		elem.tabs = mergeTabs(style?.paragraphProps?.tabs, elem.tabs);
 
@@ -1107,6 +1149,12 @@ section.${c}>footer { z-index: 1; }
 		return this.h({ tagName: "span", id: elem.name });
 	}
 
+	renderFieldResult(elem: WmlFieldResult) {
+		const result = this.h({ tagName: "span", children: this.renderElements(elem.children) }) as HTMLElement;
+		result.setAttribute("data-docx-field", elem.field);
+		return result;
+	}
+
 	renderRun(elem: WmlRun) {
 		if (elem.fieldRun)
 			return null;
@@ -1136,7 +1184,18 @@ section.${c}>footer { z-index: 1; }
 		if (elem.columns)
 			children.push(this.renderTableColumns(elem.columns));
 
-		children.push(...this.renderElements(elem.children));
+		// Leading rows marked as header rows (w:tblHeader) go in <thead>, so they
+		// repeat at the top of every page when the table is printed across pages.
+		const rows = elem.children ?? [];
+		let headerCount = 0;
+
+		while (headerCount < rows.length && (rows[headerCount] as WmlTableRow).isHeader)
+			headerCount++;
+
+		if (headerCount > 0)
+			children.push(this.h({ ns: ns.html, tagName: "thead", children: this.renderElements(rows.slice(0, headerCount)) }));
+
+		children.push(...this.renderElements(rows.slice(headerCount)));
 
 		this.currentVerticalMerge = this.tableVerticalMerges.pop();
 		this.currentCellPosition = this.tableCellPositions.pop();
