@@ -22,7 +22,8 @@ import { ThemePart } from './theme/theme-part';
 import { BaseHeaderFooterPart, FooterPart } from './header-footer/parts';
 import { Part } from './common/part';
 import { dashPatterns, formatNumber, paintAttrs, VmlElement, VmlSvgPart, VmlTextBox } from './vml/vml';
-import { DmlAnchor, DmlAxis, DmlColor, DmlDrawing, DmlShape, DmlStyleRef, formatColor, ResolvedColor, resolveColor } from './drawing/shape';
+import { DmlAnchor, DmlAxis, DmlColor, DmlDrawing, DmlLineEnd, DmlShape, DmlStyleRef, formatColor, ResolvedColor, resolveColor } from './drawing/shape';
+import { arrowHead, DrawingGroup, GroupPlace } from './drawing/group';
 import { WmlCommentRangeStart, WmlCommentReference } from './comments/elements';
 import { cx, h, ns } from './html';
 
@@ -103,6 +104,9 @@ function vmlEdge(frames: Map<string, [string, string]>, relative: string, align:
 		? `calc(${start} + ${formatNumber(offset)}pt)`
 		: `calc(${start} + (${length} - ${formatNumber(size)}pt) * ${share})`;
 }
+
+const drawnHeads = new Set(["triangle", "arrow", "stealth"]);
+const headScale: Record<string, number> = { sm: 2, med: 3, lg: 5 };
 
 const hasOwn = (record: object, key: string) => key != null && Object.prototype.hasOwnProperty.call(record, key);
 const pt = (value: number) => `${formatNumber(value)}pt`;
@@ -886,6 +890,12 @@ section.${c}>footer { z-index: 1; }
 
 			case DomType.VmlElement:
 				return this.renderVmlElement(elem as VmlElement);
+
+			case DomType.Shape:
+				return this.renderDmlShape(elem as DmlShape);
+
+			case DomType.Group:
+				return this.renderGroup(elem as DrawingGroup);
 	
 			case DomType.MmlMath:
 				return this.renderContainerNS(elem, ns.mathML, "math", { xmlns: ns.mathML });
@@ -1121,6 +1131,9 @@ section.${c}>footer { z-index: 1; }
 
 		result.style.transform = transform?.trim();
 
+		if (elem.place)
+			this.placeInGroup(elem.place, result.style);
+
 		if (this.document) {
 			this.tasks.push(this.document.loadDocumentImage(elem.src, this.currentPart).then(x => {
 				result.src = x;
@@ -1292,7 +1305,18 @@ section.${c}>footer { z-index: 1; }
 		}
 
 		const box = this.h({ tagName: "span" }) as HTMLElement;
-		this.placeVmlBox(elem, box.style);
+
+		if (elem.place) {
+			this.placeInGroup(elem.place, box.style);
+			if (elem.box.hidden) box.style.setProperty("visibility", "hidden");
+		} else {
+			this.placeVmlBox(elem, box.style);
+		}
+
+		if (elem.group) {
+			box.appendChild(this.renderGroup(elem.group));
+			return box;
+		}
 
 		const sizeless = !!elem.imageHref && elem.box.width == null && elem.box.height == null;
 		const svg = this.renderShape(box, elem, !sizeless);
@@ -1368,6 +1392,15 @@ section.${c}>footer { z-index: 1; }
 	}
 
 	renderShapeDrawing(elem: DmlDrawing): HTMLElement {
+		const wrapper = this.h({ tagName: "div" }) as HTMLElement;
+
+		if (elem.children[0].type == DomType.Group) {
+			const group = elem.children[0] as DrawingGroup;
+			this.placeShapeWrapper(elem.anchor, false, wrapper.style, elem.anchor.width ?? group.width, elem.anchor.height ?? group.height);
+			wrapper.appendChild(this.renderGroup(group));
+			return wrapper;
+		}
+
 		const shape = elem.children[0] as DmlShape;
 		const width = Math.max(0, shape.width ?? elem.anchor.width ?? 0);
 		const height = Math.max(0, shape.height ?? elem.anchor.height ?? 0);
@@ -1375,6 +1408,33 @@ section.${c}>footer { z-index: 1; }
 		if (shape.geometry != "line" && !(width > 0 && height > 0))
 			return null;
 
+		this.placeShapeWrapper(elem.anchor, shape.autoFit, wrapper.style, elem.anchor.width ?? width, elem.anchor.height ?? height);
+		wrapper.appendChild(this.renderDmlShape(shape, width, height));
+		return wrapper;
+	}
+
+	renderGroup(group: DrawingGroup): HTMLElement {
+		const box = this.h({ tagName: "div" }) as HTMLElement;
+
+		for (const [key, value] of [["display", "block"], ["position", "relative"], ["width", pt(group.width)], ["height", pt(group.height)]])
+			box.style.setProperty(key, value);
+
+		if (group.place)
+			this.placeInGroup(group.place, box.style);
+
+		this.renderElements(group.children, box);
+		return box;
+	}
+
+	placeInGroup(place: GroupPlace, style: CSSStyleDeclaration) {
+		for (const [key, value] of [["display", "block"], ["position", "absolute"], ["left", place.left], ["top", place.top], ["width", place.width], ["height", place.height]])
+			style.setProperty(key, value);
+
+		if (place.rotation)
+			style.setProperty("transform", `rotate(${formatNumber(place.rotation)}deg) ${style.transform}`.trim());
+	}
+
+	renderDmlShape(shape: DmlShape, width = shape.width, height = shape.height): HTMLElement {
 		const theme = this.document?.themePart?.theme;
 		let partial = false;
 
@@ -1410,17 +1470,34 @@ section.${c}>footer { z-index: 1; }
 		};
 
 		const radius = pt(shape.radius * Math.min(width, height));
+		const lineEnd = [width, height].map(v => !(v > 0) ? "0" : shape.place ? formatNumber(v * 4 / 3) : "100%");
 		const parts: VmlSvgPart[] = [
 			shape.geometry == "ellipse" ? { tagName: "ellipse", attrs: { cx: "50%", cy: "50%", rx: "50%", ry: "50%", ...attrs(true) } }
-				: shape.geometry == "line" ? { tagName: "line", attrs: { x1: "0", y1: "0", x2: width > 0 ? "100%" : "0", y2: height > 0 ? "100%" : "0", ...attrs(false) } }
+				: shape.geometry == "line" ? { tagName: "line", attrs: { x1: "0", y1: "0", x2: lineEnd[0], y2: lineEnd[1], ...attrs(false) } }
 				: { tagName: "rect", attrs: { width: "100%", height: "100%", ...(shape.geometry == "roundRect" ? { rx: radius, ry: radius } : {}), ...attrs(true) } }
 		];
 
+		if (shape.geometry == "line" && paint.stroke) {
+			const ends = [[0, 0], [width, height]];
+
+			[shape.headEnd, shape.tailEnd].forEach((end: DmlLineEnd, i) => {
+				if (!end || end.type == "none")
+					return;
+
+				if (!drawnHeads.has(end.type)) {
+					partial = true;
+					return;
+				}
+
+				const d = arrowHead(ends[i], ends[1 - i], paint.strokeWidth, headScale[end.width] ?? 3, headScale[end.length] ?? 3);
+				const head: Record<string, string> = { d, fill: paint.stroke, stroke: "none" };
+				if (stroke.alpha < 1) head["fill-opacity"] = formatNumber(stroke.alpha);
+				parts.push({ tagName: "path", attrs: head });
+			});
+		}
+
 		if (partial)
 			parts.push({ tagName: "g", attrs: { "data-docx-not-drawn": "partial" } });
-
-		const wrapper = this.h({ tagName: "div" }) as HTMLElement;
-		this.placeShapeWrapper(elem.anchor, shape.autoFit, wrapper.style, elem.anchor.width ?? width, elem.anchor.height ?? height);
 
 		const box = this.h({ tagName: "span" }) as HTMLElement;
 		const set = (key: string, value: string) => box.style.setProperty(key, value);
@@ -1433,11 +1510,13 @@ section.${c}>footer { z-index: 1; }
 		if (!(height >= 0.75)) set("min-height", "1px");
 		if (shape.rotation) set("transform", `rotate(${formatNumber(shape.rotation)}deg)`);
 
+		if (shape.place)
+			this.placeInGroup(shape.place, box.style);
+
 		const flip = shape.flipH || shape.flipV ? `scale(${shape.flipH ? -1 : 1}, ${shape.flipV ? -1 : 1})` : undefined;
 		this.renderShape(box, { parts, flip, textBox: shape.textBox, children: shape.children }, true, text && formatColor(text));
-		wrapper.appendChild(box);
 
-		return wrapper;
+		return box;
 	}
 
 	placeShapeWrapper(anchor: DmlAnchor, autoFit: boolean, style: CSSStyleDeclaration, width: number, height: number) {
