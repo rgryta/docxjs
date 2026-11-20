@@ -3379,15 +3379,13 @@
             if (after)
                 style["margin-bottom"] = after;
             if (line) {
+                style["--docx-run-line-height"] = lineRule == "atLeast" ? "normal" : "initial";
                 if (lineRule == "auto") {
                     style["line-height"] = `${(parseInt(line) / 240).toFixed(2)}`;
                 }
                 else {
                     const length = /(mm|cm|in|pc|pi|pt)$/.test(line) ? convertLength(line, LengthUsage.Dxa) : `${parseInt(line) / 20}pt`;
-                    if (lineRule == "atLeast")
-                        style["line-height"] = `calc(100% + ${length})`;
-                    else
-                        style["line-height"] = style["min-height"] = length;
+                    style["line-height"] = style["min-height"] = length;
                 }
             }
         }
@@ -4328,9 +4326,9 @@ section.${c}>article { margin-bottom: auto; z-index: 1; }
 section.${c}>footer { z-index: 1; }
 .${c} table { border-collapse: collapse; }
 .${c} table td, .${c} table th { vertical-align: top; }
-.${c} p { margin: 0pt; min-height: 1em; }
+.${c} p { margin: 0pt; min-height: 1em; --docx-run-line-height: initial; }
 .${c} p.${c}-continued::before { content: none; }
-.${c} span { white-space: pre-wrap; overflow-wrap: break-word; }
+.${c} span { white-space: pre-wrap; overflow-wrap: break-word; line-height: var(--docx-run-line-height, inherit); }
 .${c} a { color: inherit; text-decoration: inherit; }
 .${c} svg { fill: transparent; }
 `;
