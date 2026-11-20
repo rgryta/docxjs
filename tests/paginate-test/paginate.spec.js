@@ -5,10 +5,7 @@ describe("Paginate", function () {
     const docBlob = await fetch(`/base/tests/paginate-test/document.docx`).then(r => r.blob());
     div = document.createElement("div");
     document.body.appendChild(div);
-    await docx.renderAsync(docBlob, div, null, { className: "paginate-fixture" });
-    const longest = [...div.querySelectorAll("article p")].sort((a, b) => b.textContent.length - a.textContent.length)[0];
-    longest.append(...[...longest.childNodes].map(n => n.cloneNode(true)));
-    docx.paginate(div, "paginate-fixture");
+    await docx.renderAsync(docBlob, div, null, { paginate: true, className: "paginate-fixture" });
   });
 
   afterAll(() => div.remove());
@@ -43,13 +40,23 @@ describe("Paginate", function () {
   });
 
   it("splits a paragraph with at least two lines on each page", () => {
-    const continued = Array.from(div.querySelectorAll("p.paginate-fixture-continued"));
-    expect(continued.length).toBeGreaterThan(0);
-    for (const rest of continued) {
-      const first = rest.closest("section").previousElementSibling.querySelector("article").lastElementChild;
-      expect(lineCount(first)).toBeGreaterThanOrEqual(2);
-      expect(lineCount(rest)).toBeGreaterThanOrEqual(2);
-      expect(getComputedStyle(rest, "::before").content).toBe("none");
+    const copy = div.cloneNode(true);
+    document.body.appendChild(copy);
+    try {
+      const longest = [...copy.querySelectorAll("article p")].sort((a, b) => b.textContent.length - a.textContent.length)[0];
+      const runs = [...longest.childNodes];
+      for (let i = 0; i < 16; i++) longest.append(...runs.map(n => n.cloneNode(true)));
+      docx.paginate(copy, "paginate-fixture");
+      const continued = Array.from(copy.querySelectorAll("p.paginate-fixture-continued"));
+      expect(continued.length).toBeGreaterThan(0);
+      for (const rest of continued) {
+        const first = rest.closest("section").previousElementSibling.querySelector("article").lastElementChild;
+        expect(lineCount(first)).toBeGreaterThanOrEqual(2);
+        expect(lineCount(rest)).toBeGreaterThanOrEqual(2);
+        expect(getComputedStyle(rest, "::before").content).toBe("none");
+      }
+    } finally {
+      copy.remove();
     }
   });
 });
