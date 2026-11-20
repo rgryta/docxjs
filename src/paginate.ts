@@ -13,30 +13,107 @@ const MIN_SPLIT_HEIGHT = 24;
 
 /**
  * Splits every rendered page (section.<className>) under root until each fits its page height,
- * then shows the header and footer each page needs. With budgetMs it stops before the next page
- * once the budget is spent, keeping the pages split so far. Returns false when it stopped early.
+ * then numbers the pages, fills their PAGE and NUMPAGES fields and shows the header and footer
+ * each page needs. With budgetMs it stops before the next page once the budget is spent, keeping
+ * the pages split so far; NUMPAGES then keeps its saved value. Returns false when it stopped early.
  */
 export function paginate(root: HTMLElement, className: string = "docx", options?: { budgetMs?: number }): boolean {
 	const deadline = options?.budgetMs === undefined ? Infinity : performance.now() + options.budgetMs;
 	const pages = Array.from(root.querySelectorAll<HTMLElement>(`section.${className}`));
-	let done = true;
+	const savedCounts = new Map(Array.from(root.querySelectorAll<HTMLElement>('[data-docx-field="NUMPAGES"]')).map((f): [HTMLElement, string] => [f, f.textContent]));
+	let done = splitPages(pages, className, deadline);
+
+	if (fillPages(pages, done)) {
+		const count = pages.length;
+		done = splitPages(pages, className, deadline) && done;
+
+		if (!done)
+			restoreCounts(pages, savedCounts);
+
+		if (pages.length != count)
+			fillPages(pages, done);
+	}
+
+	return done;
+}
+
+/** Splits the pages in order, adding the new pages to the list. Returns false when it stopped at the deadline. */
+function splitPages(pages: HTMLElement[], className: string, deadline: number): boolean {
+	let number = 0;
 
 	for (let i = 0; i < pages.length; i++) {
-		if (pages.length >= MAX_PAGES || performance.now() >= deadline) {
-			done = false;
-			break;
-		}
+		if (pages.length >= MAX_PAGES || performance.now() >= deadline)
+			return false;
 
 		// Pages before i are final, so i is this page's final position.
-		showHeaderFooter(pages[i], i);
+		number = pageNumber(pages[i], number);
+		showHeaderFooter(pages[i], number);
 		const next = splitPage(pages[i], className);
 
 		if (next)
 			pages.splice(i + 1, 0, next);
 	}
 
-	pages.forEach(showHeaderFooter);
-	return done;
+	return true;
+}
+
+function pageNumber(page: HTMLElement, previous: number): number {
+	const start = page.getAttribute("data-page-start");
+	return start === null ? previous + 1 : Number(start);
+}
+
+/**
+ * Sets each page's PAGE fields to its number (unless its section numbers pages in another format)
+ * and, with withCount, each NUMPAGES field to the page count. Returns true when any text changed.
+ */
+function fillPages(pages: HTMLElement[], withCount: boolean): boolean {
+	let number = 0;
+	let changed = false;
+
+	for (const page of pages) {
+		number = pageNumber(page, number);
+
+		if (!page.hasAttribute("data-page-format"))
+			fields(page, "PAGE").forEach(f => changed = setFieldText(f, String(number)) || changed);
+
+		if (withCount)
+			fields(page, "NUMPAGES").forEach(f => changed = setFieldText(f, String(pages.length)) || changed);
+
+		showHeaderFooter(page, number);
+	}
+
+	return changed;
+}
+
+/** Puts back the saved NUMPAGES text; a field on a page split off later takes the text of the same field on the page before. */
+function restoreCounts(pages: HTMLElement[], saved: Map<HTMLElement, string>) {
+	let previous: string[] = [];
+
+	for (const page of pages) {
+		previous = fields(page, "NUMPAGES").map((f, i) => {
+			const text = saved.get(f) ?? previous[i];
+			text != null && setFieldText(f, text);
+			return text;
+		});
+	}
+}
+
+function fields(page: HTMLElement, field: "PAGE" | "NUMPAGES"): HTMLElement[] {
+	return Array.from(page.querySelectorAll<HTMLElement>(`[data-docx-field="${field}"]`));
+}
+
+/** Puts the text in the field's first text node and empties the others, so the run formatting stays. Returns true when the text changed. */
+function setFieldText(field: HTMLElement, text: string): boolean {
+	const before = field.textContent;
+	const walker = document.createTreeWalker(field, NodeFilter.SHOW_TEXT);
+	let first = true;
+
+	for (let n = walker.nextNode() as Text; n; n = walker.nextNode() as Text) {
+		n.data = first ? text : "";
+		first = false;
+	}
+
+	return field.textContent != before;
 }
 
 /**
@@ -161,6 +238,7 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 
 	const next = page.cloneNode(false) as HTMLElement;
 	next.removeAttribute("data-docx-first-page");
+	next.removeAttribute("data-page-start");
 
 	for (const c of children) {
 		if (c.tagName === "HEADER" && c.dataset.docxHf !== "first")
@@ -199,12 +277,12 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	return next;
 }
 
-function showHeaderFooter(page: HTMLElement, index: number) {
+function showHeaderFooter(page: HTMLElement, number: number) {
 	for (const tag of ["HEADER", "FOOTER"]) {
 		const alternates = (Array.from(page.children) as HTMLElement[]).filter(c => c.tagName === tag && c.dataset.docxHf);
 		const find = (type: string) => alternates.find(c => c.dataset.docxHf === type);
 		const pick = (page.hasAttribute("data-docx-first-page") ? find("first") : null)
-			?? (index % 2 == 1 ? find("even") : null)
+			?? (number % 2 == 0 ? find("even") : null)
 			?? find("default");
 
 		// without the paginate option only the renderer's pick exists; keep it rather than hide every header
