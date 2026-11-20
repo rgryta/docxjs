@@ -8,6 +8,8 @@
 // loaded. renderAsync runs it with the `paginate` option; call it yourself
 // after renderDocument when you insert the nodes elsewhere.
 
+import { cloneWithTabStops } from "./javascript";
+
 const MAX_PAGES = 2000;
 const MIN_SPLIT_HEIGHT = 24;
 
@@ -202,7 +204,7 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 
 	for (const c of children) {
 		if (c.tagName === "HEADER" && c.dataset.docxHf !== "first")
-			next.appendChild(c.cloneNode(true));
+			next.appendChild(cloneWithTabStops(c));
 	}
 
 	for (const [article, blocks] of moved) {
@@ -219,7 +221,7 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 
 	for (const c of children) {
 		if (c.tagName === "FOOTER" && c.dataset.docxHf !== "first")
-			next.appendChild(c.cloneNode(true));
+			next.appendChild(cloneWithTabStops(c));
 	}
 
 	page.after(next);
@@ -286,7 +288,7 @@ export function splitTable(table: HTMLTableElement, limitY: number): HTMLTableEl
 		if (c.tagName === "COLGROUP") {
 			rest.appendChild(c.cloneNode(true));
 		} else if (c === head) {
-			const copy = head.cloneNode(true) as HTMLTableSectionElement;
+			const copy = cloneWithTabStops(head);
 			copy.setAttribute("data-docx-repeat", "");
 			clampRowSpans(Array.from(copy.rows), copy.rows.length);
 			rest.appendChild(copy);
