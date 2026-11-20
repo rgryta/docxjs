@@ -2792,76 +2792,144 @@
         }
     }
 
-    const defaultTab = { pos: 0, leader: "none", style: "left" };
-    const maxTabs = 50;
-    function computePixelToPoint(container = document.body) {
-        const temp = document.createElement("div");
-        temp.style.width = '100pt';
-        container.appendChild(temp);
-        const result = 100 / temp.offsetWidth;
-        container.removeChild(temp);
-        return result;
+    const registered = new WeakMap();
+    const posTolerance = 0.01;
+    const leaderBorders = {
+        dot: "1px dotted",
+        middleDot: "1px dotted",
+        hyphen: "1px dashed",
+        underscore: "1px solid",
+        heavy: "2px solid",
+    };
+    function registerTabStop(span, stops, defaultTabSize) {
+        registered.set(span, { stops, defaultTabSize });
     }
-    function updateTabStop(elem, tabs, defaultTabSize, pixelToPoint = 72 / 96) {
-        const p = elem.closest("p");
-        const ebb = elem.getBoundingClientRect();
-        const pbb = p.getBoundingClientRect();
-        const pcs = getComputedStyle(p);
-        const tabStops = tabs?.length > 0 ? tabs.map(t => ({
-            pos: lengthToPoint(t.position),
-            leader: t.leader,
-            style: t.style
-        })).sort((a, b) => a.pos - b.pos) : [defaultTab];
-        const lastTab = tabStops[tabStops.length - 1];
-        const pWidthPt = pbb.width * pixelToPoint;
-        const size = lengthToPoint(defaultTabSize);
-        let pos = lastTab.pos + size;
-        if (pos < pWidthPt) {
-            for (; pos < pWidthPt && tabStops.length < maxTabs; pos += size) {
-                tabStops.push({ ...defaultTab, pos: pos });
-            }
-        }
-        const marginLeft = parseFloat(pcs.marginLeft);
-        const pOffset = pbb.left + marginLeft;
-        const left = (ebb.left - pOffset) * pixelToPoint;
-        const tab = tabStops.find(t => t.style != "clear" && t.pos > left);
-        if (tab == null)
+    function mergeTabs(base, own) {
+        if (!base?.length)
+            return own;
+        if (!own?.length)
+            return base;
+        const samePos = (a, b) => Math.abs(lengthToPoint(a.position) - lengthToPoint(b.position)) < posTolerance;
+        return [...base.filter(b => !own.some(o => samePos(o, b))), ...own];
+    }
+    function remeasureTabStops(root, className = "docx") {
+        measureTabSpans(Array.from(root.querySelectorAll(`.${className}-tab-stop`)));
+    }
+    function measureTabSpans(spans) {
+        const groups = groupByParagraph(spans.filter(s => registered.has(s) && s.isConnected && s.closest("p")?.getBoundingClientRect().width > 0));
+        if (groups.length == 0)
             return;
-        let width = 1;
-        if (tab.style == "right" || tab.style == "center") {
-            const tabStops = Array.from(p.querySelectorAll(`.${elem.className}`));
-            const nextIdx = tabStops.indexOf(elem) + 1;
-            const range = document.createRange();
-            range.setStart(elem, 1);
-            if (nextIdx < tabStops.length) {
-                range.setEndBefore(tabStops[nextIdx]);
+        groups.forEach(g => g.spans.forEach(reset));
+        const probe = document.createElement("div");
+        probe.style.cssText = "position:absolute;visibility:hidden;width:100pt";
+        (groups[0].p.closest("section") ?? groups[0].p.parentElement).appendChild(probe);
+        const scale = probe.getBoundingClientRect().width / 100;
+        probe.remove();
+        if (!(scale > 0))
+            return;
+        const rounds = Math.max(...groups.map(g => g.spans.length));
+        for (let k = 0; k < rounds; k++) {
+            const round = groups.filter(g => k < g.spans.length);
+            for (const g of round) {
+                const span = g.spans[k];
+                span.textContent = "";
+                span.style.display = "inline-block";
+                span.style.width = "0";
             }
-            else {
-                range.setEndAfter(p);
+            const measured = round.map(g => measureTab(g, k, scale));
+            round.forEach((g, i) => {
+                const span = g.spans[k];
+                span.style.width = `${measured[i].width.toFixed(2)}pt`;
+                const border = leaderBorders[measured[i].leader];
+                if (border)
+                    span.style.borderBottom = border;
+            });
+        }
+    }
+    function reset(span) {
+        span.removeAttribute("style");
+        span.textContent = "\u2003";
+    }
+    function groupByParagraph(spans) {
+        const sorted = [...spans].sort((a, b) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+        const groups = new Map();
+        for (const span of sorted) {
+            const p = span.closest("p");
+            let group = groups.get(p);
+            if (!group) {
+                const { stops, defaultTabSize } = registered.get(span);
+                const all = (stops ?? []).map(t => ({ pos: lengthToPoint(t.position), leader: t.leader, style: t.style }));
+                group = {
+                    p,
+                    spans: [],
+                    stops: all.filter(t => t.style != "clear").sort((a, b) => a.pos - b.pos),
+                    clears: all.filter(t => t.style == "clear").map(t => t.pos),
+                    defaultTabSize: lengthToPoint(defaultTabSize) || 36,
+                };
+                groups.set(p, group);
             }
-            const mul = tab.style == "center" ? 0.5 : 1;
-            const nextBB = range.getBoundingClientRect();
-            const offset = nextBB.left + mul * nextBB.width - (pbb.left - marginLeft);
-            width = tab.pos - offset * pixelToPoint;
+            group.spans.push(span);
         }
-        else {
-            width = tab.pos - left;
-        }
-        elem.innerHTML = "&nbsp;";
-        elem.style.textDecoration = "inherit";
-        elem.style.wordSpacing = `${width.toFixed(0)}pt`;
-        switch (tab.leader) {
-            case "dot":
-            case "middleDot":
-                elem.style.textDecoration = "underline";
-                elem.style.textDecorationStyle = "dotted";
+        return [...groups.values()];
+    }
+    function nextStop(g, x) {
+        const declared = g.stops.find(t => t.pos > x);
+        if (declared)
+            return declared;
+        const size = g.defaultTabSize;
+        let pos = (Math.floor(x / size) + 1) * size;
+        while (g.clears.some(c => Math.abs(c - pos) < posTolerance))
+            pos += size;
+        return { pos, leader: "none", style: "left" };
+    }
+    function measureTab(g, k, scale) {
+        const span = g.spans[k];
+        const pbb = g.p.getBoundingClientRect();
+        const pcs = getComputedStyle(g.p);
+        const cssPx = scale * 0.75;
+        const origin = pbb.left - parseFloat(pcs.marginLeft) * cssPx;
+        const sbb = span.getBoundingClientRect();
+        const x = (sbb.left - origin) / scale;
+        const tab = nextStop(g, x);
+        const segment = (stopAt) => segmentWidth(span, g.spans[k + 1], g.p, sbb, stopAt) / scale;
+        let width;
+        switch (tab.style) {
+            case "right":
+            case "end":
+                width = tab.pos - x - segment();
                 break;
-            case "hyphen":
-            case "heavy":
-            case "underscore":
-                elem.style.textDecoration = "underline";
+            case "center":
+                width = tab.pos - x - segment() / 2;
                 break;
+            case "decimal":
+                width = tab.pos - x - segment(".");
+                break;
+            default:
+                width = tab.pos - x;
         }
+        const room = (pbb.right - parseFloat(pcs.paddingRight) * cssPx - sbb.left) / scale;
+        return { width: Math.max(0, Math.min(width, room)), leader: tab.leader };
+    }
+    function segmentWidth(span, next, p, sbb, stopAt) {
+        const range = document.createRange();
+        range.setStartAfter(span);
+        if (next)
+            range.setEndBefore(next);
+        else
+            range.setEnd(p, p.childNodes.length);
+        if (stopAt) {
+            const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+            walker.currentNode = span;
+            for (let n = walker.nextNode(); n && range.isPointInRange(n, 0); n = walker.nextNode()) {
+                const i = n.textContent.indexOf(stopAt);
+                if (i >= 0) {
+                    range.setEnd(n, i);
+                    break;
+                }
+            }
+        }
+        const rights = Array.from(range.getClientRects()).filter(r => r.width > 0 && r.top < sbb.bottom).map(r => r.right);
+        return rights.length ? Math.max(0, Math.max(...rights) - sbb.left) : 0;
     }
     function lengthToPoint(length) {
         return parseFloat(length);
@@ -3037,7 +3105,10 @@
             for (const style of styles.filter(x => x.basedOn)) {
                 var baseStyle = stylesMap[style.basedOn];
                 if (baseStyle) {
+                    const tabs = mergeTabs(baseStyle.paragraphProps?.tabs, style.paragraphProps?.tabs);
                     style.paragraphProps = mergeDeep(style.paragraphProps, baseStyle.paragraphProps);
+                    if (tabs)
+                        style.paragraphProps = { ...style.paragraphProps, tabs };
                     style.runProps = mergeDeep(style.runProps, baseStyle.runProps);
                     for (const baseValues of baseStyle.styles) {
                         const styleValues = style.styles.find(x => x.target == baseValues.target);
@@ -3534,9 +3605,9 @@ section.${c}>footer { z-index: 1; }
             return this.h({ ns, tagName, children: this.renderElements(elem.children), ...props });
         }
         renderParagraph(elem) {
-            var result = this.toHTML(elem, ns.html, "p");
             const style = this.findStyle(elem.styleName);
-            elem.tabs ?? (elem.tabs = style?.paragraphProps?.tabs);
+            elem.tabs = mergeTabs(style?.paragraphProps?.tabs, elem.tabs);
+            var result = this.toHTML(elem, ns.html, "p");
             const numbering = elem.numbering ?? style?.paragraphProps?.numbering;
             if (numbering) {
                 result.classList.add(this.numberingClass(numbering.id, numbering.level));
@@ -3669,8 +3740,8 @@ section.${c}>footer { z-index: 1; }
             var tabSpan = this.h({ tagName: "span", children: ["\u2003"] });
             if (this.options.experimental) {
                 tabSpan.className = this.tabStopClass();
-                var stops = findParent(elem, DomType.Paragraph)?.tabs;
-                this.currentTabs.push({ stops, span: tabSpan });
+                registerTabStop(tabSpan, findParent(elem, DomType.Paragraph)?.tabs, this.defaultTabSize);
+                this.currentTabs.push(tabSpan);
             }
             return tabSpan;
         }
@@ -3935,12 +4006,7 @@ section.${c}>footer { z-index: 1; }
         refreshTabStops() {
             if (!this.options.experimental)
                 return;
-            setTimeout(() => {
-                const pixelToPoint = computePixelToPoint();
-                for (let tab of this.currentTabs) {
-                    updateTabStop(tab.span, tab.stops, this.defaultTabSize, pixelToPoint);
-                }
-            }, 500);
+            setTimeout(() => measureTabSpans(this.currentTabs), 500);
         }
         createElementNS(ns, tagName, props, children) {
             return this.h({ ns, tagName, children, ...props });
@@ -4011,6 +4077,7 @@ section.${c}>footer { z-index: 1; }
 
     exports.defaultOptions = defaultOptions;
     exports.parseAsync = parseAsync;
+    exports.remeasureTabStops = remeasureTabStops;
     exports.renderAsync = renderAsync;
     exports.renderDocument = renderDocument;
 
