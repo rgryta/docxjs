@@ -14,7 +14,7 @@ import { IDomStyle, IDomSubStyle } from './document/style';
 import { WmlFieldChar, WmlFieldSimple, WmlInstructionText } from './document/fields';
 import { convertLength, LengthUsage, LengthUsageType } from './document/common';
 import { notDrawn, parseVmlElement, VmlShapeType } from './vml/vml';
-import { canDrawChoice, DmlShape, isDrawableShape, parseShape, parseShapeDrawing } from './drawing/shape';
+import { canDrawChoice, isDrawableShape, parseDrawingGroup, parseShape, parseShapeDrawing } from './drawing/shape';
 import { WmlComment, WmlCommentRangeEnd, WmlCommentRangeStart, WmlCommentReference } from './comments/elements';
 import { encloseFontFamily } from './utils';
 
@@ -61,7 +61,7 @@ export interface DocumentParserOptions {
 export class DocumentParser {
 	options: DocumentParserOptions;
 	vmlShapeTypes = new Map<string, VmlShapeType>();
-	textBoxDepth = 0;
+	drawingDepth = 0;
 
 	constructor(options?: Partial<DocumentParserOptions>) {
 		this.options = {
@@ -129,15 +129,19 @@ export class DocumentParser {
 	}
 
 	parseTextBoxContent(element: Element): OpenXmlElement[] {
-		if (this.textBoxDepth >= 16)
+		return this.nested(() => this.parseBodyElements(element));
+	}
+
+	nested<T>(parse: () => T): T {
+		if (this.drawingDepth >= 16)
 			return null;
 
-		this.textBoxDepth++;
+		this.drawingDepth++;
 
 		try {
-			return this.parseBodyElements(element);
+			return parse();
 		} finally {
-			this.textBoxDepth--;
+			this.drawingDepth--;
 		}
 	}
 
@@ -919,8 +923,8 @@ export class DocumentParser {
 			}
 		}
 
-		if (g?.type == DomType.Shape)
-			return parseShapeDrawing(node, g as DmlShape, this.textBoxDepth > 0);
+		if (g?.type == DomType.Shape || g?.type == DomType.Group)
+			return parseShapeDrawing(node, g, this.drawingDepth > 0);
 
 		if (wrapType == "wrapTopAndBottom") {
 			result.cssStyle['display'] = 'block';
@@ -958,6 +962,9 @@ export class DocumentParser {
 
 				case "wsp":
 					return isDrawableShape(n) ? parseShape(n, this) : notDrawn("graphic");
+
+				case "wgp":
+					return parseDrawingGroup(n, xml.element(elem.parentNode as Element, "extent"), this);
 			}
 		}
 
