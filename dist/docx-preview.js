@@ -2922,7 +2922,7 @@
                         break;
                 }
             }
-            if (g?.type == DomType.Shape || g?.type == DomType.Group)
+            if (g?.type == DomType.Shape || g?.type == DomType.Group || (isAnchor && wrapType == "wrapNone" && g?.type == DomType.Image))
                 return parseShapeDrawing(node, g, this.drawingDepth > 0);
             if (wrapType == "wrapTopAndBottom") {
                 result.cssStyle['display'] = 'block';
@@ -2930,16 +2930,6 @@
                     result.cssStyle['text-align'] = posX.align;
                     result.cssStyle['width'] = "100%";
                 }
-            }
-            else if (wrapType == "wrapNone") {
-                result.cssStyle['display'] = 'block';
-                result.cssStyle['position'] = 'relative';
-                result.cssStyle["width"] = "0px";
-                result.cssStyle["height"] = "0px";
-                if (posX.offset)
-                    result.cssStyle["left"] = posX.offset;
-                if (posY.offset)
-                    result.cssStyle["top"] = posY.offset;
             }
             else if (isAnchor && (posX.align == 'left' || posX.align == 'right')) {
                 result.cssStyle["float"] = posX.align;
@@ -4885,6 +4875,11 @@ section.${c}>footer { z-index: 1; }
                 wrapper.appendChild(this.renderGroup(group));
                 return wrapper;
             }
+            if (elem.children[0].type == DomType.Image) {
+                this.placeShapeWrapper(elem.anchor, false, wrapper.style, elem.anchor.width, elem.anchor.height);
+                wrapper.appendChild(this.renderImage(elem.children[0]));
+                return wrapper;
+            }
             const shape = elem.children[0];
             const width = Math.max(0, shape.width ?? elem.anchor.width ?? 0);
             const height = Math.max(0, shape.height ?? elem.anchor.height ?? 0);
@@ -5363,7 +5358,8 @@ section.${c}>footer { z-index: 1; }
         const footer = children.find(c => c.tagName === "FOOTER" && getComputedStyle(c).display !== "none");
         const below = footer ? outerHeight(footer) : 0;
         const limitY = page.getBoundingClientRect().top + pageHeight - (parseFloat(style.paddingBottom) || 0) - below + 0.5;
-        if (limitY - articles[0].getBoundingClientRect().top < MIN_SPLIT_HEIGHT)
+        const pageSpace = limitY - articles[0].getBoundingClientRect().top;
+        if (pageSpace < MIN_SPLIT_HEIGHT)
             return null;
         const flow = [
             ...articles.flatMap(article => Array.from(article.children).map(block => ({ block, article }))),
@@ -5371,10 +5367,7 @@ section.${c}>footer { z-index: 1; }
         ];
         const over = flow.findIndex(f => !isBlank(f.block) && f.block.getBoundingClientRect().bottom > limitY);
         if (over < 0) {
-            for (const f of flow) {
-                if (f.article && isBlank(f.block) && f.block.getBoundingClientRect().bottom > limitY)
-                    f.block.style.display = "none";
-            }
+            hideBlankOverflow(flow, limitY);
             return null;
         }
         const overArticle = flow[over].article;
@@ -5384,7 +5377,7 @@ section.${c}>footer { z-index: 1; }
             carry = splitTable(flow[over].block, limitY);
         else if (flow[over].block.tagName === "P")
             carry = splitParagraph(flow[over].block, limitY, className);
-        if (carry) {
+        if (carry || unbreakableHeight(flow[over].block) > pageSpace) {
             cut = over + 1;
         }
         else {
@@ -5392,8 +5385,10 @@ section.${c}>footer { z-index: 1; }
                 cut--;
             if (cut === 0)
                 cut = over || 1;
-            if (cut >= flow.length)
-                return null;
+        }
+        if (!carry && flow.slice(cut).every(f => f.article && isBlank(f.block))) {
+            hideBlankOverflow(flow, limitY);
+            return null;
         }
         const moved = new Map();
         const notes = [];
@@ -5442,6 +5437,21 @@ section.${c}>footer { z-index: 1; }
                     c.style.display = c === pick ? "" : "none";
             }
         }
+    }
+    function hideBlankOverflow(flow, limitY) {
+        for (const f of flow) {
+            if (f.article && isBlank(f.block) && f.block.getBoundingClientRect().bottom > limitY)
+                f.block.style.display = "none";
+        }
+    }
+    function unbreakableHeight(block) {
+        if (block instanceof HTMLTableElement) {
+            const first = Array.from(block.rows).find(r => r.parentElement !== block.tHead);
+            return first ? first.getBoundingClientRect().bottom - block.getBoundingClientRect().top : 0;
+        }
+        if (block.tagName === "P" && getComputedStyle(block).breakInside !== "avoid")
+            return 0;
+        return outerHeight(block);
     }
     function outerHeight(el) {
         const style = getComputedStyle(el);
