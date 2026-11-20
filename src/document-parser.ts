@@ -932,7 +932,7 @@ export class DocumentParser {
 			}
 		}
 
-		if (g?.type == DomType.Shape || g?.type == DomType.Group)
+		if (g?.type == DomType.Shape || g?.type == DomType.Group || (isAnchor && wrapType == "wrapNone" && g?.type == DomType.Image))
 			return parseShapeDrawing(node, g, this.drawingDepth > 0);
 
 		if (wrapType == "wrapTopAndBottom") {
@@ -942,17 +942,6 @@ export class DocumentParser {
 				result.cssStyle['text-align'] = posX.align;
 				result.cssStyle['width'] = "100%";
 			}
-		}
-		else if (wrapType == "wrapNone") {
-			result.cssStyle['display'] = 'block';
-			result.cssStyle['position'] = 'relative';
-			result.cssStyle["width"] = "0px";
-			result.cssStyle["height"] = "0px";
-
-			if (posX.offset)
-				result.cssStyle["left"] = posX.offset;
-			if (posY.offset)
-				result.cssStyle["top"] = posY.offset;
 		}
 		else if (isAnchor && (posX.align == 'left' || posX.align == 'right')) {
 			result.cssStyle["float"] = posX.align;

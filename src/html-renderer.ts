@@ -1472,6 +1472,12 @@ section.${c}>footer { z-index: 1; }
 			return wrapper;
 		}
 
+		if (elem.children[0].type == DomType.Image) {
+			this.placeShapeWrapper(elem.anchor, false, wrapper.style, elem.anchor.width, elem.anchor.height);
+			wrapper.appendChild(this.renderImage(elem.children[0] as IDomImage));
+			return wrapper;
+		}
+
 		const shape = elem.children[0] as DmlShape;
 		const width = Math.max(0, shape.width ?? elem.anchor.width ?? 0);
 		const height = Math.max(0, shape.height ?? elem.anchor.height ?? 0);
