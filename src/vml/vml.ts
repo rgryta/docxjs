@@ -78,6 +78,7 @@ export function parseVmlElement(elem: Element, parser: DocumentParser, watermark
 
 	switch (elem.localName) {
 		case "rect":
+		case "roundrect":
 		case "oval":
 		case "line":
 		case "shape":
@@ -140,6 +141,12 @@ export function parseVmlElement(elem: Element, parser: DocumentParser, watermark
 				result.parts.push({ tagName: "rect", attrs: { width: "100%", height: "100%", ...paintAttrs(paint, true, true) } });
 				break;
 
+			case "roundrect": {
+				const radius = `${formatNumber(arcSize(xml.attr(elem, "arcsize")) * Math.min(result.box.width ?? 0, result.box.height ?? 0))}pt`;
+				result.parts.push({ tagName: "rect", attrs: { width: "100%", height: "100%", rx: radius, ry: radius, ...paintAttrs(paint, true, true) } });
+				break;
+			}
+
 			case "oval":
 				result.parts.push({ tagName: "ellipse", attrs: { cx: "50%", cy: "50%", rx: "50%", ry: "50%", ...paintAttrs(paint, true, true) } });
 				break;
@@ -179,13 +186,18 @@ export function parseVmlElement(elem: Element, parser: DocumentParser, watermark
 	if (textBox) {
 		result.textBox = parseTextBox(textBox, style.get("v-text-anchor"));
 		const content = xml.element(textBox, "txbxContent");
-		content && result.children.push(...parser.parseBodyElements(content));
+		const children = content ? parser.parseTextBoxContent(content) : [];
+
+		if (!children)
+			return notDrawn("depth");
+
+		result.children.push(...children);
 	}
 
 	return result;
 }
 
-function notDrawn(reason: string): VmlElement {
+export function notDrawn(reason: string): VmlElement {
 	const result = new VmlElement();
 	result.notDrawn = reason;
 	return result;
@@ -313,6 +325,17 @@ function parseLine(elem: Element, box: VmlBox, paint: VmlPaint): VmlSvgPart {
 	};
 }
 
+function arcSize(value: string): number {
+	const text = value?.trim() ?? "";
+	const fixed = /^(\d+)f$/.exec(text);
+	const percent = /^(\d+\.?\d*|\.\d+)%$/.exec(text);
+	const size = fixed ? parseInt(fixed[1]) / 65536
+		: percent ? parseFloat(percent[1]) / 100
+		: /^(\d+\.?\d*|\.\d+)$/.test(text) ? parseFloat(text) : 0.2;
+
+	return clamp(size, 0, 0.5);
+}
+
 function parseViewBox(coordsize: string, coordorigin: string): string {
 	const integer = (part: string) => /^-?\d+$/.test(part?.trim() ?? "") ? parseInt(part) : null;
 	const size = (coordsize ?? "1000,1000").split(",").map(integer);
@@ -345,7 +368,7 @@ export function vmlBool(value: string, defaultValue: boolean): boolean {
 	return trueValues.has(key) ? true : falseValues.has(key) ? false : defaultValue;
 }
 
-const namedColors = new Set(("aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet " +
+export const namedColors = new Set(("aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet " +
 	"brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan " +
 	"darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred " +
 	"darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue " +
@@ -377,7 +400,7 @@ export function vmlColor(value: string): string {
 	return null;
 }
 
-const dashPatterns: Record<string, number[]> = {
+export const dashPatterns: Record<string, number[]> = {
 	dash: [4, 3],
 	shortdash: [3, 1],
 	dot: [1, 3],
@@ -390,7 +413,7 @@ const dashPatterns: Record<string, number[]> = {
 	longdashdotdot: [8, 3, 1, 3, 1, 3],
 };
 
-interface VmlPaint {
+export interface VmlPaint {
 	fill: string;
 	stroke: string;
 	strokeWidth: number;
@@ -424,7 +447,7 @@ function strokeWeight(value: string): number {
 	return clamp(isNaN(points) ? 0.75 : points, 0.25, 12);
 }
 
-function paintAttrs(paint: VmlPaint, filled: boolean, stroked: boolean): Record<string, string> {
+export function paintAttrs(paint: VmlPaint, filled: boolean, stroked: boolean): Record<string, string> {
 	const result: Record<string, string> = {
 		fill: (filled && paint.fill) || "none",
 		stroke: (stroked && paint.stroke) || "none",
