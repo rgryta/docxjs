@@ -1,12 +1,16 @@
 import { DocumentParser } from '../document-parser';
-import { DomType, OpenXmlElement, OpenXmlElementBase } from '../document/dom';
+import { DomType, IDomImage, OpenXmlElement, OpenXmlElementBase } from '../document/dom';
 import xml from '../parser/xml-parser';
 import { DmlTheme } from '../theme/theme';
 import { clamp } from '../utils';
-import { formatNumber, VmlTextBox } from '../vml/vml';
+import { formatNumber, notDrawn, VmlTextBox } from '../vml/vml';
+import { DrawingGroup, GroupFrame, groupFrame, GroupPlace, placeChild } from './group';
 
 const shapeNamespace = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
+const groupNamespace = "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup";
 const drawnPresets = new Set(["rect", "roundRect", "ellipse", "line"]);
+const groupProps = new Set(["cNvPr", "cNvGrpSpPr", "nvGrpSpPr", "grpSpPr", "extLst"]);
+const maxDepth = 16;
 const maxEmu = 1e12;
 
 type Rgb = number[];
@@ -43,6 +47,15 @@ export class DmlShape extends OpenXmlElementBase {
 	fontRef: DmlStyleRef;
 	textBox?: VmlTextBox;
 	autoFit: boolean;
+	headEnd?: DmlLineEnd;
+	tailEnd?: DmlLineEnd;
+	place?: GroupPlace;
+}
+
+export interface DmlLineEnd {
+	type: string;
+	width: string;
+	length: string;
 }
 
 export interface DmlAxis {
@@ -78,13 +91,13 @@ function emuPoints(text: string): number {
 
 const descendant = (root: Element, localName: string) => Array.from(root.getElementsByTagNameNS("*", localName));
 
-export function isDrawableShape(wsp: Element): boolean {
+export function isDrawableShape(wsp: Element, inGroup = false): boolean {
 	const spPr = xml.element(wsp, "spPr");
 	const prst = spPr && xml.elementAttr(spPr, "prstGeom", "prst");
 	const bodyPr = xml.element(wsp, "bodyPr");
 	const warp = bodyPr && xml.element(bodyPr, "prstTxWarp");
 
-	return drawnPresets.has(prst)
+	return (drawnPresets.has(prst) || inGroup && prst == "straightConnector1")
 		&& !xml.element(spPr, "custGeom")
 		&& ["gradFill", "pattFill", "blipFill"].every(name => !descendant(spPr, name).length)
 		&& !xml.element(wsp, "linkedTxbx")
@@ -97,7 +110,7 @@ export function canDrawChoice(choice: Element): boolean {
 	const children = xml.elements(choice);
 
 	return !!requires
-		&& requires.split(" ").every(prefix => prefix && choice.lookupNamespaceURI(prefix) == shapeNamespace)
+		&& requires.split(" ").every(prefix => prefix && [shapeNamespace, groupNamespace].includes(choice.lookupNamespaceURI(prefix)))
 		// the parser takes one drawing from a Choice, so a Choice with more keeps its Fallback
 		&& children.length == 1
 		&& children.every(child => child.localName == "drawing" && drawsShapes(child));
@@ -109,7 +122,15 @@ function drawsShapes(drawing: Element): boolean {
 	const graphicData = graphic && xml.element(graphic, "graphicData");
 	const shapes = graphicData ? xml.elements(graphicData) : [];
 
-	return shapes.length > 0 && shapes.every(s => s.namespaceURI == shapeNamespace && s.localName == "wsp" && isDrawableShape(s));
+	return shapes.length > 0 && shapes.every(s => s.namespaceURI == shapeNamespace && s.localName == "wsp" && isDrawableShape(s)
+		|| s.namespaceURI == groupNamespace && s.localName == "wgp" && drawsGroup(s, 1));
+}
+
+function drawsGroup(group: Element, depth: number): boolean {
+	return depth <= maxDepth && xml.elements(group).every(child => groupProps.has(child.localName)
+		|| child.localName == "wsp" && isDrawableShape(child, true)
+		|| child.localName == "pic"
+		|| child.localName == "grpSp" && drawsGroup(child, depth + 1));
 }
 
 export function parseShape(wsp: Element, parser: DocumentParser): OpenXmlElement {
@@ -124,7 +145,7 @@ export function parseShape(wsp: Element, parser: DocumentParser): OpenXmlElement
 	const content = txbx && xml.element(txbx, "txbxContent");
 
 	const result = new DmlShape();
-	result.geometry = xml.attr(geometry, "prst");
+	result.geometry = xml.attr(geometry, "prst") == "straightConnector1" ? "line" : xml.attr(geometry, "prst");
 	result.radius = adjustment(geometry);
 	result.width = ext ? emuPoints(xml.attr(ext, "cx")) : null;
 	result.height = ext ? emuPoints(xml.attr(ext, "cy")) : null;
@@ -137,6 +158,8 @@ export function parseShape(wsp: Element, parser: DocumentParser): OpenXmlElement
 	result.lnRef = parseStyleRef(style, "lnRef");
 	result.fontRef = parseStyleRef(style, "fontRef");
 	result.autoFit = !!bodyPr && !!xml.element(bodyPr, "spAutoFit");
+	result.headEnd = parseLineEnd(ln, "headEnd");
+	result.tailEnd = parseLineEnd(ln, "tailEnd");
 
 	if (content) {
 		result.children = parser.parseTextBoxContent(content);
@@ -144,6 +167,11 @@ export function parseShape(wsp: Element, parser: DocumentParser): OpenXmlElement
 	}
 
 	return result;
+}
+
+function parseLineEnd(ln: Element, name: string): DmlLineEnd {
+	const end = ln && xml.element(ln, name);
+	return end ? { type: xml.attr(end, "type") ?? "none", width: xml.attr(end, "w"), length: xml.attr(end, "len") } : null;
 }
 
 function adjustment(geometry: Element): number {
@@ -192,7 +220,7 @@ function parseStyleRef(style: Element, name: string): DmlStyleRef {
 	return ref ? { idx: integer(xml.attr(ref, "idx")), color: parseColor(ref) } : null;
 }
 
-export function parseShapeDrawing(node: Element, shape: DmlShape, nested: boolean): DmlDrawing {
+export function parseShapeDrawing(node: Element, shape: OpenXmlElement, nested: boolean): DmlDrawing {
 	const docPr = xml.element(node, "docPr");
 
 	if (docPr && xml.boolAttr(docPr, "hidden", false))
@@ -221,6 +249,72 @@ export function parseShapeDrawing(node: Element, shape: DmlShape, nested: boolea
 			v: simplePos ? { relative: "page", offset: emuPoints(xml.attr(simplePos, "y")) } : axis("positionV"),
 		}
 	};
+}
+
+export function parseDrawingGroup(wgp: Element, extent: Element, parser: DocumentParser): OpenXmlElement {
+	return parseGroup(wgp, parser, extent ? emuPoints(xml.attr(extent, "cx")) : null, extent ? emuPoints(xml.attr(extent, "cy")) : null, false, false);
+}
+
+function xfrmPair(xfrm: Element, name: string, a: string, b: string): number[] {
+	const el = xfrm && xml.element(xfrm, name);
+	return el ? [integer(xml.attr(el, a)), integer(xml.attr(el, b))] : [null, null];
+}
+
+function parseGroup(group: Element, parser: DocumentParser, width: number, height: number, flipH: boolean, flipV: boolean): OpenXmlElement {
+	const props = xml.element(group, "grpSpPr");
+	const xfrm = props && xml.element(props, "xfrm");
+	const frame = groupFrame(xfrmPair(xfrm, "chOff", "x", "y"), xfrmPair(xfrm, "chExt", "cx", "cy"), width, height,
+		flipH != (!!xfrm && xml.boolAttr(xfrm, "flipH", false)), flipV != (!!xfrm && xml.boolAttr(xfrm, "flipV", false)));
+
+	if (!frame)
+		return notDrawn("group-child");
+
+	const children = parser.nested(() => xml.elements(group)
+		.filter(child => !groupProps.has(child.localName))
+		.map(child => parseGroupChild(child, parser, frame)));
+
+	if (!children)
+		return notDrawn("depth");
+
+	const result = new DrawingGroup();
+	result.width = width;
+	result.height = height;
+	result.children = children;
+	return result;
+}
+
+function parseGroupChild(child: Element, parser: DocumentParser, frame: GroupFrame): OpenXmlElement {
+	const kind = child.localName;
+
+	if (kind == "wsp" ? !isDrawableShape(child, true) : kind != "grpSp" && kind != "pic")
+		return notDrawn("group-child");
+
+	const props = xml.element(child, kind == "grpSp" ? "grpSpPr" : "spPr");
+	const xfrm = props && xml.element(props, "xfrm");
+	const line = kind == "wsp" && ["line", "straightConnector1"].includes(props && xml.elementAttr(props, "prstGeom", "prst"));
+	const rotation = ((xfrm && integer(xml.attr(xfrm, "rot"))) ?? 0) % 21600000 / 60000;
+	const mapped = placeChild(frame, [...xfrmPair(xfrm, "off", "x", "y"), ...xfrmPair(xfrm, "ext", "cx", "cy")], line, rotation);
+
+	if (!mapped)
+		return notDrawn("group-child");
+
+	if (kind == "pic")
+		return { ...parser.parsePicture(child), cssStyle: {}, rotation: 0, place: mapped.place } as IDomImage;
+
+	const result = kind == "grpSp" ? parseGroup(child, parser, mapped.width, mapped.height, frame.flipH, frame.flipV) : parseShape(child, parser);
+
+	if (result instanceof DmlShape) {
+		result.width = mapped.width;
+		result.height = mapped.height;
+		result.rotation = 0;
+		result.flipH = result.flipH != frame.flipH;
+		result.flipV = result.flipV != frame.flipV;
+	}
+
+	if (result instanceof DmlShape || result instanceof DrawingGroup)
+		result.place = mapped.place;
+
+	return result;
 }
 
 const hex6 = /^[0-9A-Fa-f]{6}$/;
