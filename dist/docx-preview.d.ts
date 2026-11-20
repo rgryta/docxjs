@@ -33,6 +33,7 @@ export interface Options {
     renderChanges: boolean;
     renderComments: boolean;
     renderAltChunks: boolean;
+    paginate: boolean;
     h: (elemOrText: HElement | Node | string) => Node; //experimental, subject to change
 }
 
@@ -43,3 +44,4 @@ export declare function parseAsync(data: Blob | any, userOptions?: Partial<Optio
 export declare function renderDocument(document: WordDocument, userOptions?: Partial<Options>): Promise<Node[]>;
 export declare function renderAsync(data: Blob | any, bodyContainer: HTMLElement, styleContainer?: HTMLElement, userOptions?: Partial<Options>): Promise<any>;
 export declare function remeasureTabStops(root: ParentNode, className?: string): void;
+export declare function paginate(root: HTMLElement, className?: string, options?: { budgetMs?: number }): boolean;
