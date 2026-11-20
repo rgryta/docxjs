@@ -19,9 +19,9 @@ import { WmlBookmarkStart } from './document/bookmarks';
 import { IDomStyle } from './document/style';
 import { WmlBaseNote, WmlFootnote } from './notes/elements';
 import { ThemePart } from './theme/theme-part';
-import { BaseHeaderFooterPart } from './header-footer/parts';
+import { BaseHeaderFooterPart, FooterPart } from './header-footer/parts';
 import { Part } from './common/part';
-import { VmlElement } from './vml/vml';
+import { formatNumber, VmlElement } from './vml/vml';
 import { WmlCommentRangeStart, WmlCommentReference } from './comments/elements';
 import { cx, h, ns } from './html';
 
@@ -302,6 +302,18 @@ export class HtmlRenderer {
 				if (!this.options.ignoreHeight)
 					style.minHeight = props.pageSize.height;
 			}
+
+			const pageVariables = {
+				"--docx-page-width": props.pageSize?.width,
+				"--docx-page-height": props.pageSize?.height,
+				"--docx-margin-left": props.pageMargins?.left,
+				"--docx-margin-right": props.pageMargins?.right,
+				"--docx-margin-top": props.pageMargins?.top,
+				"--docx-margin-bottom": props.pageMargins?.bottom,
+			};
+
+			for (const [key, value] of Object.entries(pageVariables))
+				if (value) style[key] = value;
 		}
 
 		return this.h({ tagName: "section", className, style }) as HTMLElement;
@@ -1194,44 +1206,122 @@ section.${c}>footer { z-index: 1; }
 	}
 
 	renderVmlPicture(elem: OpenXmlElement) {
-		return this.renderContainer(elem, "div");
+		return this.renderContainer(elem, "span");
 	}
 
-	renderVmlElement(elem: VmlElement): SVGElement {
-		var container = this.h({ ns: ns.svg, tagName: "svg", style: elem.cssStyleText }) as SVGElement;
-
-		const result = this.renderVmlChildElement(elem);
-
-		if (elem.imageHref?.id) {
-			this.tasks.push(this.document?.loadDocumentImage(elem.imageHref.id, this.currentPart)
-				.then(x => result.setAttribute("href", x)));
+	renderVmlElement(elem: VmlElement): Element {
+		if (elem.notDrawn) {
+			const mark = this.h({ tagName: "span" }) as HTMLElement;
+			mark.setAttribute("data-docx-not-drawn", elem.notDrawn);
+			return mark;
 		}
 
-		container.appendChild(result);
+		const box = this.h({ tagName: "span" }) as HTMLElement;
+		this.placeVmlBox(elem, box.style);
 
-		requestAnimationFrame(() => {
-			const bb = (container.firstElementChild as any).getBBox();
+		const svg = this.createSvgElement("svg");
+		const sizeless = !!elem.imageHref && elem.box.width == null && elem.box.height == null;
 
-			container.setAttribute("width", `${Math.ceil(bb.x +  bb.width)}`);
-			container.setAttribute("height", `${Math.ceil(bb.y + bb.height)}`);
-		});
+		if (!sizeless) {
+			for (const [key, value] of [["position", "absolute"], ["inset", "0"], ["width", "100%"], ["height", "100%"], ["overflow", "visible"]])
+				svg.style.setProperty(key, value);
+		}
 
-		return container;
-	}
+		if (elem.viewBox) {
+			svg.setAttribute("viewBox", elem.viewBox);
+			svg.setAttribute("preserveAspectRatio", "none");
+		}
 
-	renderVmlChildElement(elem: VmlElement): any {
-		const result = this.createSvgElement(elem.tagName as any);
-		Object.entries(elem.attrs).forEach(([k, v]) => result.setAttribute(k, v));
+		if (elem.flip)
+			svg.style.setProperty("transform", elem.flip);
 
-		for (let child of elem.children) {
-			if (child.type == DomType.VmlElement) {
-				result.appendChild(this.renderVmlChildElement(child as VmlElement));
-			} else {
-				result.appendChild(...asArray(this.renderElement(child as any)));
+		for (const part of elem.parts) {
+			const node = this.createSvgElement(part.tagName);
+			Object.entries(part.attrs).forEach(([k, v]) => node.setAttribute(k, v));
+
+			if (part.tagName == "image" && elem.imageHref?.id) {
+				this.tasks.push(this.document?.loadDocumentImage(elem.imageHref.id, this.currentPart)
+					.then(x => node.setAttribute("href", x)));
 			}
+
+			svg.appendChild(node);
 		}
 
-		return result;
+		box.appendChild(svg);
+
+		if (elem.textBox) {
+			const text = this.h({ tagName: "div" }) as HTMLElement;
+			const [top, right, bottom, left] = elem.textBox.padding;
+			const textStyle = {
+				"position": "relative", "min-height": "100%", "box-sizing": "border-box",
+				"padding-top": top, "padding-right": right, "padding-bottom": bottom, "padding-left": left,
+				"display": "flex", "flex-direction": "column", "justify-content": elem.textBox.justify,
+			};
+			Object.entries(textStyle).forEach(([k, v]) => text.style.setProperty(k, v));
+			this.renderElements(elem.children, text);
+			box.appendChild(text);
+		}
+
+		if (sizeless) {
+			requestAnimationFrame(() => {
+				try {
+					const bb = (svg.firstElementChild as SVGGraphicsElement).getBBox();
+					svg.setAttribute("width", `${Math.ceil(bb.x + bb.width)}`);
+					svg.setAttribute("height", `${Math.ceil(bb.y + bb.height)}`);
+				} catch {
+					// getBBox throws on a detached or undisplayed element
+				}
+			});
+		}
+
+		return box;
+	}
+
+	placeVmlBox(elem: VmlElement, style: CSSStyleDeclaration) {
+		const box = elem.box;
+		const pt = (value: number) => `${formatNumber(value)}pt`;
+		const set = (key: string, value: string) => style.setProperty(key, value);
+
+		set("display", "inline-block");
+		set("position", "relative");
+
+		if (box.width != null) set("width", pt(box.width));
+		if (box.height != null) set("height", pt(box.height));
+		if (!(box.width >= 0.75)) set("min-width", "1px");
+		if (!(box.height >= 0.75)) set("min-height", "1px");
+
+		if (elem.wrapType == "topAndBottom") {
+			set("display", "block");
+			set("margin-left", box.hRelative == "page" ? `calc(${pt(box.x)} - var(--docx-margin-left, 0pt))` : pt(box.x));
+			set("margin-top", pt(box.y));
+		} else if (box.placed) {
+			set("position", "absolute");
+
+			switch (box.hRelative) {
+				case "page": set("left", pt(box.x)); break;
+				case "margin":
+				case "text": set("left", `calc(var(--docx-margin-left, 0pt) + ${pt(box.x)})`); break;
+				default: set("margin-left", pt(box.x)); break;
+			}
+
+			const top = box.vRelative == "page" ? pt(box.y)
+				: box.vRelative == "margin" ? `var(--docx-margin-top, 0pt) + ${pt(box.y)}` : null;
+
+			if (top == null)
+				set("margin-top", pt(box.y));
+			else if (this.currentPart instanceof FooterPart)
+				set("bottom", `calc(var(--docx-page-height, 100%) - ${top} - ${pt(box.height ?? 0)})`);
+			else
+				set("top", box.vRelative == "page" ? top : `calc(${top})`);
+		} else {
+			if (box.position == "absolute") set("position", "absolute");
+			if (box.x) set("margin-left", pt(box.x));
+			if (box.y) set("margin-top", pt(box.y));
+		}
+
+		if (box.zIndex < 0) set("z-index", "-1");
+		if (box.hidden) set("visibility", "hidden");
+		if (box.rotation) set("transform", `rotate(${box.rotation}deg)`);
 	}
 
 	renderMmlRadical(elem: OpenXmlElement) {
