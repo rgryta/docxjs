@@ -3005,7 +3005,7 @@ class HtmlRenderer {
         if (this.options.renderComments && globalThis.Highlight) {
             this.commentHighlight = new Highlight();
         }
-        const result = [...this.renderDefaultStyle()];
+        const result = [...this.renderDefaultStyle(document.stylesPart?.styles)];
         if (document.themePart) {
             result.push(...this.renderTheme(document.themePart));
         }
@@ -3350,7 +3350,7 @@ class HtmlRenderer {
     renderWrapper(children) {
         return this.h({ tagName: "div", className: `${this.className}-wrapper`, children });
     }
-    renderDefaultStyle() {
+    renderDefaultStyle(styles) {
         var c = this.className;
         var wrapperStyle = `
 .${c}-wrapper { background: gray; padding: 30px; padding-bottom: 0px; display: flex; flex-flow: column; align-items: center; } 
@@ -3370,6 +3370,10 @@ section.${c}>footer { z-index: 1; }
 .${c} a { color: inherit; text-decoration: inherit; }
 .${c} svg { fill: transparent; }
 `;
+        const setsFontSize = styles?.some(s => (s.id == null || (s.isDefault && s.target == "p"))
+            && s.styles.some(x => x.target == "span" && x.values["font-size"]));
+        if (!setsFontSize)
+            styleText += `section.${c} { font-size: 10pt; }\n`;
         if (this.options.renderComments) {
             styleText += `
 .${c}-comment-ref { cursor: default; }
