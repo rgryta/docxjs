@@ -805,6 +805,7 @@ class BaseHeaderFooterPart extends Part {
     }
     parseXml(root) {
         this.rootElement = this.createRootElement();
+        this._documentParser.vmlShapeTypes.clear();
         this.rootElement.children = this._documentParser.parseBodyElements(root);
     }
 }
@@ -1268,93 +1269,426 @@ function parseBookmarkEnd(elem, xml) {
     };
 }
 
+const vmlNamespace = "urn:schemas-microsoft-com:vml";
+const modifierTags = new Set(["stroke", "fill", "path", "formulas", "f", "handles", "h", "shadow", "textbox",
+    "imagedata", "shapetype", "lock", "wrap", "anchorlock"]);
 class VmlElement extends OpenXmlElementBase {
     constructor() {
         super(...arguments);
         this.type = DomType.VmlElement;
-        this.attrs = {};
+        this.parts = [];
     }
 }
-function parseVmlElement(elem, parser) {
-    var result = new VmlElement();
+function parseVmlElement(elem, parser, watermarkAllowed = false) {
+    if (elem.namespaceURI != vmlNamespace)
+        return null;
+    if (elem.localName == "shapetype") {
+        const id = globalXmlParser.attr(elem, "id");
+        id && parser.vmlShapeTypes.set(id, readShapeType(elem));
+        return null;
+    }
     switch (elem.localName) {
         case "rect":
-            result.tagName = "rect";
-            Object.assign(result.attrs, { width: '100%', height: '100%' });
-            break;
         case "oval":
-            result.tagName = "ellipse";
-            Object.assign(result.attrs, { cx: "50%", cy: "50%", rx: "50%", ry: "50%" });
-            break;
         case "line":
-            result.tagName = "line";
-            break;
         case "shape":
-            result.tagName = "g";
-            break;
-        case "textbox":
-            result.tagName = "foreignObject";
-            Object.assign(result.attrs, { width: '100%', height: '100%' });
             break;
         default:
-            return null;
+            return modifierTags.has(elem.localName) ? null : notDrawn("vml-element");
     }
-    for (const at of globalXmlParser.attrs(elem)) {
-        switch (at.localName) {
-            case "style":
-                result.cssStyleText = at.value;
-                break;
-            case "fillcolor":
-                result.attrs.fill = at.value;
-                break;
-            case "from":
-                const [x1, y1] = parsePoint(at.value);
-                Object.assign(result.attrs, { x1, y1 });
-                break;
-            case "to":
-                const [x2, y2] = parsePoint(at.value);
-                Object.assign(result.attrs, { x2, y2 });
-                break;
-        }
+    let shapeType = {};
+    const typeRef = elem.localName == "shape" ? globalXmlParser.attr(elem, "type") : null;
+    if (typeRef) {
+        shapeType = typeRef.startsWith("#") ? parser.vmlShapeTypes.get(typeRef.substring(1)) : undefined;
+        if (!shapeType)
+            return notDrawn("vml-type");
     }
+    const result = new VmlElement();
+    let stroke = null, fill = null, textBox = null, imageData = null;
+    let hasTextPath = false;
+    const innerMarks = [];
     for (const el of globalXmlParser.elements(elem)) {
         switch (el.localName) {
             case "stroke":
-                Object.assign(result.attrs, parseStroke(el));
+                stroke = el;
                 break;
             case "fill":
-                Object.assign(result.attrs, parseFill());
+                fill = el;
+                break;
+            case "textbox":
+                textBox = el;
                 break;
             case "imagedata":
-                result.tagName = "image";
-                Object.assign(result.attrs, { width: '100%', height: '100%' });
-                result.imageHref = {
-                    id: globalXmlParser.attr(el, "id"),
-                    title: globalXmlParser.attr(el, "title"),
-                };
+                imageData = el;
                 break;
-            case "txbxContent":
-                result.children.push(...parser.parseBodyElements(el));
+            case "textpath":
+                hasTextPath = true;
+                break;
+            case "wrap":
+                result.wrapType = globalXmlParser.attr(el, "type");
                 break;
             default:
-                const child = parseVmlElement(el, parser);
-                child && result.children.push(child);
+                if (el.namespaceURI == vmlNamespace && !modifierTags.has(el.localName))
+                    innerMarks.push(markPart("vml-element"));
                 break;
         }
     }
+    if (hasTextPath)
+        return notDrawn(watermarkAllowed && elem.localName == "shape" ? "watermark" : "vml-element");
+    const style = parseVmlStyle(globalXmlParser.attr(elem, "style"));
+    result.box = parseBox(style);
+    const imageId = imageData && globalXmlParser.attr(imageData, "id");
+    const paint = parsePaint(elem, shapeType, stroke, fill);
+    if (imageId) {
+        result.imageHref = { id: imageId, title: globalXmlParser.attr(imageData, "title") };
+        result.parts.push({ tagName: "image", attrs: { width: "100%", height: "100%", preserveAspectRatio: "none" } });
+    }
+    else {
+        switch (elem.localName) {
+            case "rect":
+                result.parts.push({ tagName: "rect", attrs: { width: "100%", height: "100%", ...paintAttrs(paint, true, true) } });
+                break;
+            case "oval":
+                result.parts.push({ tagName: "ellipse", attrs: { cx: "50%", cy: "50%", rx: "50%", ry: "50%", ...paintAttrs(paint, true, true) } });
+                break;
+            case "line":
+                result.parts.push(parseLine(elem, result.box, paint));
+                break;
+            case "shape": {
+                const pathText = globalXmlParser.attr(elem, "path") || shapeType.path;
+                const subpaths = pathText ? parseVmlPath(pathText) : null;
+                if (subpaths) {
+                    result.viewBox = parseViewBox(globalXmlParser.attr(elem, "coordsize") ?? shapeType.coordsize, globalXmlParser.attr(elem, "coordorigin") ?? shapeType.coordorigin);
+                    for (const subpath of subpaths) {
+                        result.parts.push({
+                            tagName: "path",
+                            attrs: { d: subpath.d, "vector-effect": "non-scaling-stroke", ...paintAttrs(paint, subpath.filled, subpath.stroked) }
+                        });
+                    }
+                }
+                else if (!textBox) {
+                    return notDrawn(pathText ? "vml-path" : "vml-shape");
+                }
+                else if (pathText) {
+                    innerMarks.push(markPart("vml-path"));
+                }
+                break;
+            }
+        }
+    }
+    result.parts.push(...innerMarks);
+    const flip = style.get("flip");
+    if (flip)
+        result.flip = flip.length > 1 ? "scale(-1, -1)" : flip == "x" ? "scale(-1, 1)" : "scale(1, -1)";
+    if (textBox) {
+        result.textBox = parseTextBox(textBox, style.get("v-text-anchor"));
+        const content = globalXmlParser.element(textBox, "txbxContent");
+        content && result.children.push(...parser.parseBodyElements(content));
+    }
     return result;
 }
-function parseStroke(el) {
+function notDrawn(reason) {
+    const result = new VmlElement();
+    result.notDrawn = reason;
+    return result;
+}
+function markPart(reason) {
+    return { tagName: "g", attrs: { "data-docx-not-drawn": reason } };
+}
+function readShapeType(elem) {
+    const result = {};
+    for (const key of ["path", "coordsize", "coordorigin", "filled", "stroked", "fillcolor", "strokecolor"]) {
+        const value = globalXmlParser.attr(elem, key);
+        if (value)
+            result[key] = value;
+    }
+    return result;
+}
+const lengthPattern = /^[+-]?(\d+\.?\d*|\.\d+)(pt|px|in|cm|mm|pc|pi)?$/;
+const styleRules = new Map([
+    ["position", /^(absolute|relative|static)$/],
+    ["left", lengthPattern],
+    ["top", lengthPattern],
+    ["margin-left", lengthPattern],
+    ["margin-top", lengthPattern],
+    ["width", lengthPattern],
+    ["height", lengthPattern],
+    ["z-index", /^-?\d{1,10}$/],
+    ["rotation", /^-?\d+(\.\d+)?$/],
+    ["flip", /^(x|y|x y|y x)$/],
+    ["visibility", /^(hidden|visible|inherit)$/],
+    ["mso-position-horizontal", /^(absolute|left|center|right|inside|outside|top|bottom)$/],
+    ["mso-position-vertical", /^(absolute|left|center|right|inside|outside|top|bottom)$/],
+    ["mso-position-horizontal-relative", /^(page|margin|text|char)$/],
+    ["mso-position-vertical-relative", /^(page|margin|text|line)$/],
+    ["v-text-anchor", /^(top|middle|bottom)(-center|-baseline|-center-baseline)?$/],
+]);
+function parseVmlStyle(text) {
+    const result = new Map();
+    for (const item of (text ?? "").split(";")) {
+        const colon = item.indexOf(":");
+        if (colon > 0)
+            result.set(item.substring(0, colon).trim().toLowerCase(), item.substring(colon + 1).trim().toLowerCase());
+    }
+    for (const [key, value] of result) {
+        if (!styleRules.get(key)?.test(value))
+            result.delete(key);
+    }
+    return result;
+}
+function lengthPoints(value, unitlessAsPixels = false) {
+    const match = value == null ? null : lengthPattern.exec(value.trim().toLowerCase());
+    if (!match)
+        return null;
+    const number = value.trim().replace(/^\+/, "").replace(/[a-z]+$/i, "");
+    if (!match[2]) {
+        if (unitlessAsPixels)
+            return clamp(parseFloat(number) * 0.75, -1e4, 10000);
+        return parseFloat(number) == 0 ? 0 : null;
+    }
+    const css = convertLength(number + match[2], LengthUsage.Point);
+    return clamp(parseFloat(css) * (css.endsWith("px") ? 0.75 : 1), -1e4, 10000);
+}
+function parseBox(style) {
+    const position = style.get("position");
+    const hAlign = style.get("mso-position-horizontal");
+    const zIndex = style.get("z-index");
+    const rotation = style.get("rotation");
     return {
-        'stroke': globalXmlParser.attr(el, "color"),
-        'stroke-width': globalXmlParser.lengthAttr(el, "weight", LengthUsage.Emu) ?? '1px'
+        position,
+        placed: position == "absolute" && (!hAlign || hAlign == "absolute"),
+        hRelative: style.get("mso-position-horizontal-relative"),
+        vRelative: style.get("mso-position-vertical-relative"),
+        x: lengthPoints(style.get("margin-left")) ?? lengthPoints(style.get("left")) ?? 0,
+        y: lengthPoints(style.get("margin-top")) ?? lengthPoints(style.get("top")) ?? 0,
+        width: nonNegative(lengthPoints(style.get("width"))),
+        height: nonNegative(lengthPoints(style.get("height"))),
+        zIndex: zIndex ? parseInt(zIndex) : undefined,
+        rotation: rotation ? parseFloat(rotation) : undefined,
+        hidden: style.get("visibility") == "hidden",
     };
 }
-function parseFill(el) {
-    return {};
+function nonNegative(value) {
+    return value == null ? undefined : Math.max(0, value);
 }
-function parsePoint(val) {
-    return val.split(",");
+function parsePoint(value) {
+    const [x, y] = (value ?? "").split(",");
+    return [lengthPoints(x || "0", true) ?? 0, lengthPoints(y || "0", true) ?? 0];
+}
+function parseLine(elem, box, paint) {
+    const [x1, y1] = parsePoint(globalXmlParser.attr(elem, "from"));
+    const [x2, y2] = parsePoint(globalXmlParser.attr(elem, "to"));
+    box.x += Math.min(x1, x2);
+    box.y += Math.min(y1, y2);
+    box.width = Math.abs(x2 - x1);
+    box.height = Math.abs(y2 - y1);
+    return {
+        tagName: "line",
+        attrs: {
+            x1: x1 <= x2 ? "0" : "100%",
+            y1: y1 <= y2 ? "0" : "100%",
+            x2: x1 <= x2 ? "100%" : "0",
+            y2: y1 <= y2 ? "100%" : "0",
+            ...paintAttrs(paint, false, true)
+        }
+    };
+}
+function parseViewBox(coordsize, coordorigin) {
+    const integer = (part) => /^-?\d+$/.test(part?.trim() ?? "") ? parseInt(part) : null;
+    const size = (coordsize ?? "1000,1000").split(",").map(integer);
+    const origin = (coordorigin ?? "").split(",").map(integer);
+    return [origin[0] ?? 0, origin[1] ?? 0, size[0] > 0 ? size[0] : 1, size[1] > 0 ? size[1] : 1].join(" ");
+}
+const textAnchor = { top: "flex-start", middle: "center", bottom: "flex-end" };
+const defaultInset = ["7.2pt", "3.6pt", "7.2pt", "3.6pt"];
+function parseTextBox(elem, anchor) {
+    const parts = (globalXmlParser.attr(elem, "inset") ?? "").split(",");
+    const [left, top, right, bottom] = defaultInset.map((fallback, i) => {
+        const value = lengthPoints(parts[i]);
+        return value == null ? fallback : `${formatNumber(Math.max(0, value))}pt`;
+    });
+    return {
+        padding: [top, right, bottom, left],
+        justify: textAnchor[anchor?.split("-")[0]] ?? "flex-start",
+    };
+}
+const trueValues = new Set(["t", "true", "1", "yes", "on"]);
+const falseValues = new Set(["f", "false", "0", "no", "off"]);
+function vmlBool(value, defaultValue) {
+    const key = value?.trim().toLowerCase();
+    return trueValues.has(key) ? true : falseValues.has(key) ? false : defaultValue;
+}
+const namedColors = new Set(("aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet " +
+    "brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan " +
+    "darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred " +
+    "darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue " +
+    "dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray " +
+    "green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen " +
+    "lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink " +
+    "lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen " +
+    "linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue " +
+    "mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy " +
+    "oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip " +
+    "peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown " +
+    "seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal " +
+    "thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen").split(" "));
+function vmlColor(value) {
+    const color = value?.replace(/\s*\[\d+\]\s*$/, "").trim().toLowerCase();
+    if (!color)
+        return null;
+    if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/.test(color) || namedColors.has(color))
+        return color;
+    const rgb = /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/.exec(color);
+    if (rgb && rgb.slice(1).every(c => parseInt(c) <= 255))
+        return `rgb(${rgb.slice(1).map(c => parseInt(c)).join(", ")})`;
+    return null;
+}
+const dashPatterns = {
+    dash: [4, 3],
+    shortdash: [3, 1],
+    dot: [1, 3],
+    shortdot: [1, 1],
+    dashdot: [4, 3, 1, 3],
+    longdash: [8, 3],
+    longdashdot: [8, 3, 1, 3],
+    shortdashdot: [3, 1, 1, 1],
+    shortdashdotdot: [3, 1, 1, 1, 1, 1],
+    longdashdotdot: [8, 3, 1, 3, 1, 3],
+};
+function parsePaint(elem, shapeType, stroke, fill) {
+    const filled = vmlBool(globalXmlParser.attr(elem, "filled") ?? shapeType.filled, true) && vmlBool(fill && globalXmlParser.attr(fill, "on"), true);
+    const stroked = vmlBool(globalXmlParser.attr(elem, "stroked") ?? shapeType.stroked, true) && vmlBool(stroke && globalXmlParser.attr(stroke, "on"), true);
+    const strokeColor = (stroke && globalXmlParser.attr(stroke, "color")) ?? globalXmlParser.attr(elem, "strokecolor") ?? shapeType.strokecolor ?? "black";
+    const weight = (stroke && globalXmlParser.attr(stroke, "weight")) ?? globalXmlParser.attr(elem, "strokeweight");
+    const dashStyle = stroke && globalXmlParser.attr(stroke, "dashstyle")?.trim().toLowerCase();
+    return {
+        fill: filled ? vmlColor(globalXmlParser.attr(elem, "fillcolor") ?? shapeType.fillcolor ?? "white") : null,
+        stroke: stroked ? vmlColor(strokeColor) : null,
+        strokeWidth: strokeWeight(weight),
+        dash: Object.prototype.hasOwnProperty.call(dashPatterns, dashStyle) ? dashPatterns[dashStyle] : undefined,
+    };
+}
+function strokeWeight(value) {
+    const text = value?.trim().toLowerCase();
+    if (!text || !lengthPattern.test(text))
+        return 0.75;
+    const css = /[a-z]$/.test(text) ? convertLength(text.replace(/^\+/, ""), LengthUsage.Point) : convertLength(text, LengthUsage.Emu);
+    const points = parseFloat(css) * (css.endsWith("px") ? 0.75 : 1);
+    return clamp(isNaN(points) ? 0.75 : points, 0.25, 12);
+}
+function paintAttrs(paint, filled, stroked) {
+    const result = {
+        fill: (filled && paint.fill) || "none",
+        stroke: (stroked && paint.stroke) || "none",
+    };
+    if (result.stroke != "none") {
+        result["stroke-width"] = `${formatNumber(paint.strokeWidth)}pt`;
+        if (paint.dash)
+            result["stroke-dasharray"] = paint.dash.map(k => `${formatNumber(k * paint.strokeWidth)}pt`).join(" ");
+    }
+    return result;
+}
+function formatNumber(value) {
+    return `${parseFloat(value.toFixed(2))}`;
+}
+const pathCommands = ["nf", "ns", "m", "l", "c", "x", "e", "r", "t", "v"];
+const pathGroupSize = { m: 2, l: 2, r: 2, t: 2, c: 6, v: 6 };
+const svgCommands = {
+    m: ["M", "L"], t: ["m", "l"], l: ["L", "L"], r: ["l", "l"], c: ["C", "C"], v: ["c", "c"]
+};
+const maxPathTokens = 10000;
+const maxPathValue = 2 ** 31;
+function parseVmlPath(text) {
+    const segments = [];
+    const token = /(-?\d+)|(,)|(\s+)/y;
+    let tokens = 0;
+    let afterComma = false;
+    let started = false;
+    const endSegment = () => {
+        const last = segments[segments.length - 1];
+        if (last && afterComma)
+            last.values.push(0);
+        afterComma = false;
+        started = false;
+    };
+    for (let i = 0; i < text.length;) {
+        if (++tokens > maxPathTokens)
+            return null;
+        const command = pathCommands.find(c => text.startsWith(c, i));
+        if (command) {
+            endSegment();
+            segments.push({ command, values: [] });
+            i += command.length;
+            continue;
+        }
+        token.lastIndex = i;
+        const match = token.exec(text);
+        if (!match || !segments.length && !match[3])
+            return null;
+        i = token.lastIndex;
+        const values = segments[segments.length - 1]?.values;
+        if (match[1]) {
+            const value = parseInt(match[1]);
+            if (Math.abs(value) > maxPathValue)
+                return null;
+            values.push(value);
+            afterComma = false;
+            started = true;
+        }
+        else if (match[2]) {
+            if (!started || afterComma)
+                values.push(0);
+            afterComma = true;
+            started = true;
+        }
+        else {
+            tokens--;
+        }
+    }
+    endSegment();
+    const subpaths = [];
+    let current = null;
+    const start = () => {
+        current = { d: [], filled: true, stroked: true, drawn: 0 };
+        subpaths.push(current);
+        return current;
+    };
+    for (const { command, values } of segments) {
+        const size = pathGroupSize[command];
+        if (!size) {
+            if (values.length)
+                return null;
+            if (command == "nf")
+                (current ?? start()).filled = false;
+            else if (command == "ns")
+                (current ?? start()).stroked = false;
+            else if (command == "x" && current?.d.length)
+                current.d.push("Z");
+            continue;
+        }
+        if (!values.length || values.length % size)
+            return null;
+        if (command == "m") {
+            if (!current || current.drawn)
+                start();
+            else
+                current.d = [];
+        }
+        else if (!current) {
+            start();
+        }
+        const move = command == "m" || command == "t";
+        if (!current.d.length && !move)
+            current.d.push("M 0 0");
+        const [first, rest] = svgCommands[command];
+        for (let k = 0; k < values.length; k += size) {
+            current.d.push(`${k ? rest : first} ${values.slice(k, k + size).join(" ")}`);
+            if (k || !move)
+                current.drawn++;
+        }
+    }
+    const drawn = subpaths.filter(s => s.drawn);
+    return drawn.length ? drawn.map(s => ({ d: s.d.join(" "), filled: s.filled, stroked: s.stroked })) : null;
 }
 
 class WmlComment extends OpenXmlElementBase {
@@ -1421,6 +1755,7 @@ const mmlTagMap = {
 };
 class DocumentParser {
     constructor(options) {
+        this.vmlShapeTypes = new Map();
         this.options = {
             ignoreWidth: false,
             debug: false,
@@ -1429,6 +1764,7 @@ class DocumentParser {
     }
     parseNotes(xmlDoc, elemName, elemClass) {
         var result = [];
+        this.vmlShapeTypes.clear();
         for (let el of globalXmlParser.elements(xmlDoc, elemName)) {
             const node = new elemClass();
             node.id = globalXmlParser.attr(el, "id");
@@ -1440,6 +1776,7 @@ class DocumentParser {
     }
     parseComments(xmlDoc) {
         var result = [];
+        this.vmlShapeTypes.clear();
         for (let el of globalXmlParser.elements(xmlDoc, "comment")) {
             const item = new WmlComment();
             item.id = globalXmlParser.attr(el, "id");
@@ -1455,6 +1792,7 @@ class DocumentParser {
         var xbody = globalXmlParser.element(xmlDoc, "body");
         var background = globalXmlParser.element(xmlDoc, "background");
         var sectPr = globalXmlParser.element(xbody, "sectPr");
+        this.vmlShapeTypes.clear();
         return {
             type: DomType.Document,
             children: this.parseBodyElements(xbody),
@@ -1887,8 +2225,8 @@ class DocumentParser {
     }
     parseRun(node, parent) {
         var result = { type: DomType.Run, parent: parent, children: [] };
-        for (let c of globalXmlParser.elements(node)) {
-            c = this.checkAlternateContent(c);
+        for (const child of globalXmlParser.elements(node)) {
+            const c = this.checkAlternateContent(child);
             switch (c?.localName) {
                 case "t":
                     result.children.push({
@@ -1972,7 +2310,7 @@ class DocumentParser {
                         result.children.push(d);
                     break;
                 case "pict":
-                    result.children.push(this.parseVmlPicture(c));
+                    result.children.push(this.parseVmlPicture(c, c === child));
                     break;
                 case "rPr":
                     this.parseRunProperties(c, result);
@@ -2041,10 +2379,10 @@ class DocumentParser {
             return true;
         });
     }
-    parseVmlPicture(elem) {
+    parseVmlPicture(elem, watermarkAllowed = false) {
         const result = { type: DomType.VmlPicture, children: [] };
         for (const el of globalXmlParser.elements(elem)) {
-            const child = parseVmlElement(el, this);
+            const child = parseVmlElement(el, this, watermarkAllowed);
             child && result.children.push(child);
         }
         return result;
@@ -2959,7 +3297,12 @@ function h(elem) {
             result.setAttribute("style", style);
         }
         else {
-            Object.assign(result.style, style);
+            for (const [key, value] of Object.entries(style)) {
+                if (key.startsWith("--"))
+                    result.style.setProperty(key, value);
+                else
+                    result.style[key] = value;
+            }
         }
     }
     if (props) {
@@ -3184,6 +3527,17 @@ class HtmlRenderer {
                 if (!this.options.ignoreHeight)
                     style.minHeight = props.pageSize.height;
             }
+            const pageVariables = {
+                "--docx-page-width": props.pageSize?.width,
+                "--docx-page-height": props.pageSize?.height,
+                "--docx-margin-left": props.pageMargins?.left,
+                "--docx-margin-right": props.pageMargins?.right,
+                "--docx-margin-top": props.pageMargins?.top,
+                "--docx-margin-bottom": props.pageMargins?.bottom,
+            };
+            for (const [key, value] of Object.entries(pageVariables))
+                if (value)
+                    style[key] = value;
         }
         return this.h({ tagName: "section", className, style });
     }
@@ -3813,35 +4167,119 @@ section.${c}>footer { z-index: 1; }
         return result;
     }
     renderVmlPicture(elem) {
-        return this.renderContainer(elem, "div");
+        return this.renderContainer(elem, "span");
     }
     renderVmlElement(elem) {
-        var container = this.h({ ns: ns.svg, tagName: "svg", style: elem.cssStyleText });
-        const result = this.renderVmlChildElement(elem);
-        if (elem.imageHref?.id) {
-            this.tasks.push(this.document?.loadDocumentImage(elem.imageHref.id, this.currentPart)
-                .then(x => result.setAttribute("href", x)));
+        if (elem.notDrawn) {
+            const mark = this.h({ tagName: "span" });
+            mark.setAttribute("data-docx-not-drawn", elem.notDrawn);
+            return mark;
         }
-        container.appendChild(result);
-        requestAnimationFrame(() => {
-            const bb = container.firstElementChild.getBBox();
-            container.setAttribute("width", `${Math.ceil(bb.x + bb.width)}`);
-            container.setAttribute("height", `${Math.ceil(bb.y + bb.height)}`);
-        });
-        return container;
+        const box = this.h({ tagName: "span" });
+        this.placeVmlBox(elem, box.style);
+        const svg = this.createSvgElement("svg");
+        const sizeless = !!elem.imageHref && elem.box.width == null && elem.box.height == null;
+        if (!sizeless) {
+            for (const [key, value] of [["position", "absolute"], ["inset", "0"], ["width", "100%"], ["height", "100%"], ["overflow", "visible"]])
+                svg.style.setProperty(key, value);
+        }
+        if (elem.viewBox) {
+            svg.setAttribute("viewBox", elem.viewBox);
+            svg.setAttribute("preserveAspectRatio", "none");
+        }
+        if (elem.flip)
+            svg.style.setProperty("transform", elem.flip);
+        for (const part of elem.parts) {
+            const node = this.createSvgElement(part.tagName);
+            Object.entries(part.attrs).forEach(([k, v]) => node.setAttribute(k, v));
+            if (part.tagName == "image" && elem.imageHref?.id) {
+                this.tasks.push(this.document?.loadDocumentImage(elem.imageHref.id, this.currentPart)
+                    .then(x => node.setAttribute("href", x)));
+            }
+            svg.appendChild(node);
+        }
+        box.appendChild(svg);
+        if (elem.textBox) {
+            const text = this.h({ tagName: "div" });
+            const [top, right, bottom, left] = elem.textBox.padding;
+            const textStyle = {
+                "position": "relative", "min-height": "100%", "box-sizing": "border-box",
+                "padding-top": top, "padding-right": right, "padding-bottom": bottom, "padding-left": left,
+                "display": "flex", "flex-direction": "column", "justify-content": elem.textBox.justify,
+            };
+            Object.entries(textStyle).forEach(([k, v]) => text.style.setProperty(k, v));
+            this.renderElements(elem.children, text);
+            box.appendChild(text);
+        }
+        if (sizeless) {
+            requestAnimationFrame(() => {
+                try {
+                    const bb = svg.firstElementChild.getBBox();
+                    svg.setAttribute("width", `${Math.ceil(bb.x + bb.width)}`);
+                    svg.setAttribute("height", `${Math.ceil(bb.y + bb.height)}`);
+                }
+                catch {
+                }
+            });
+        }
+        return box;
     }
-    renderVmlChildElement(elem) {
-        const result = this.createSvgElement(elem.tagName);
-        Object.entries(elem.attrs).forEach(([k, v]) => result.setAttribute(k, v));
-        for (let child of elem.children) {
-            if (child.type == DomType.VmlElement) {
-                result.appendChild(this.renderVmlChildElement(child));
-            }
-            else {
-                result.appendChild(...asArray(this.renderElement(child)));
-            }
+    placeVmlBox(elem, style) {
+        const box = elem.box;
+        const pt = (value) => `${formatNumber(value)}pt`;
+        const set = (key, value) => style.setProperty(key, value);
+        set("display", "inline-block");
+        set("position", "relative");
+        if (box.width != null)
+            set("width", pt(box.width));
+        if (box.height != null)
+            set("height", pt(box.height));
+        if (!(box.width >= 0.75))
+            set("min-width", "1px");
+        if (!(box.height >= 0.75))
+            set("min-height", "1px");
+        if (elem.wrapType == "topAndBottom") {
+            set("display", "block");
+            set("margin-left", box.hRelative == "page" ? `calc(${pt(box.x)} - var(--docx-margin-left, 0pt))` : pt(box.x));
+            set("margin-top", pt(box.y));
         }
-        return result;
+        else if (box.placed) {
+            set("position", "absolute");
+            switch (box.hRelative) {
+                case "page":
+                    set("left", pt(box.x));
+                    break;
+                case "margin":
+                case "text":
+                    set("left", `calc(var(--docx-margin-left, 0pt) + ${pt(box.x)})`);
+                    break;
+                default:
+                    set("margin-left", pt(box.x));
+                    break;
+            }
+            const top = box.vRelative == "page" ? pt(box.y)
+                : box.vRelative == "margin" ? `var(--docx-margin-top, 0pt) + ${pt(box.y)}` : null;
+            if (top == null)
+                set("margin-top", pt(box.y));
+            else if (this.currentPart instanceof FooterPart)
+                set("bottom", `calc(var(--docx-page-height, 100%) - ${top} - ${pt(box.height ?? 0)})`);
+            else
+                set("top", box.vRelative == "page" ? top : `calc(${top})`);
+        }
+        else {
+            if (box.position == "absolute")
+                set("position", "absolute");
+            if (box.x)
+                set("margin-left", pt(box.x));
+            if (box.y)
+                set("margin-top", pt(box.y));
+        }
+        if (box.zIndex < 0)
+            set("z-index", "-1");
+        if (box.hidden)
+            set("visibility", "hidden");
+        if (box.rotation)
+            set("transform", `rotate(${box.rotation}deg)`);
     }
     renderMmlRadical(elem) {
         const base = elem.children.find(el => el.type == DomType.MmlBase);
