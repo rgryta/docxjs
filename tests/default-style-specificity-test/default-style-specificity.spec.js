@@ -5,7 +5,7 @@
 
     const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles ${W}>
-<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>
+<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="160"/></w:pPr></w:pPrDefault></w:docDefaults>
 <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:rPr><w:sz w:val="40"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:color w:val="00AA00"/><w:sz w:val="18"/></w:rPr></w:style>
 <w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:tblPr><w:tblCellMar><w:left w:w="216" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>
@@ -61,6 +61,10 @@ ${body}
 
     it("keeps Normal's size on the paragraph itself, so its line box is sized from it", () => {
       expect(points(span("plain").closest("p"))).toBeCloseTo(9, 2);
+    });
+
+    it("keeps the document defaults' paragraph spacing over the base paragraph reset", () => {
+      expect(parseFloat(getComputedStyle(span("plain").closest("p")).marginBottom) * 0.75).toBeCloseTo(8, 2);
     });
 
     it("puts the default table style's cell margins on the cells", () => {

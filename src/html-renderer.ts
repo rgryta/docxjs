@@ -702,8 +702,8 @@ section.${c}>footer { z-index: 1; }
 				var selector = `${style.target ?? ''}.${style.cssName}`; //${subStyle.mod ?? ''}
 				const subTarget = style.target != subStyle.target ? ` ${subStyle.target}` : '';
 
-				// document defaults have no target and sit below every style
-				if (style.target == null)
+				// document defaults have no target; their run values sit below every style, their paragraph values still beat the base `p` reset
+				if (style.target == null && subStyle.target != "p")
 					selector = `:where(${selector})`;
 
 				selector += subTarget;
