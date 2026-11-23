@@ -66,6 +66,12 @@ describe("Shape groups", function () {
       frame: xfrm({ x: 10 * PT, y: 10 * PT, w: 80 * PT, h: 0 }),
       spPr: `<a:ln w="${2 * PT}">${solid("FF0000")}<a:tailEnd type="triangle"/></a:ln>`,
     })))))),
+    para("case-hidden", run(inline(200, 100, groupGraphic(wgp(identity(200, 100),
+      box("123456", 0, 0, 50, 50),
+      box("654321", 100, 0, 50, 50).replace("<wps:wsp>", '<wps:wsp><wps:cNvPr id="7" name="h" hidden="1"/>'),
+      picture(xfrm({ x: 0, y: 60 * PT, w: 40 * PT, h: 20 * PT })).replace('<pic:cNvPr id="2" name="p"/>', '<pic:cNvPr id="2" name="p" hidden="1"/>')))))),
+    para("case-flip-picture", run(inline(200, 100, groupGraphic(wgp(identity(200, 100, ' flipH="1"'),
+      picture(xfrm({ x: 0, y: 0, w: 40 * PT, h: 20 * PT }))))))),
     para("case-picture", run(inline(200, 100, groupGraphic(wgp(identity(200, 100),
       picture(xfrm({ x: 100 * PT, y: 50 * PT, w: 40 * PT, h: 20 * PT }))))))),
     para("case-flip", run(inline(200, 100, groupGraphic(wgp(identity(200, 100, ' flipH="1"'), shape({
@@ -167,6 +173,17 @@ ${body}
     expectNear(rect(head).right, rect(box).right);
     expectNear(rect(line).right, rect(head).left);
     expect(reasons(paragraph("case-arrow"))).toEqual([]);
+  });
+
+  it("skips group children the author hid", () => {
+    const group = paragraph("case-hidden");
+    expect(filled(group, "#123456").length).toBe(1);
+    expect(filled(group, "#654321").length).toBe(0);
+    expect(group.querySelector("img")).toBeNull();
+  });
+
+  it("mirrors a picture in a flipped group", () => {
+    expect(new DOMMatrix(getComputedStyle(paragraph("case-flip-picture").querySelector("img")).transform).a).toBe(-1);
   });
 
   it("fills a picture's child box with its image", () => {
