@@ -73,6 +73,8 @@ describe("Shape groups", function () {
       picture(xfrm({ x: 0, y: 60 * PT, w: 40 * PT, h: 20 * PT })).replace('<pic:cNvPr id="2" name="p"/>', '<pic:cNvPr id="2" name="p" hidden="1"/>')))))),
     para("case-flip-picture", run(inline(200, 100, groupGraphic(wgp(identity(200, 100, ' flipH="1"'),
       picture(xfrm({ x: 0, y: 0, w: 40 * PT, h: 20 * PT }))))))),
+    para("case-flip-cropped", run(inline(200, 100, groupGraphic(wgp(identity(200, 100, ' flipH="1"'),
+      picture(xfrm({ x: 0, y: 0, w: 40 * PT, h: 20 * PT })).replace('<a:blip r:embed="rIdImage"/>', '<a:blip r:embed="rIdImage"/><a:srcRect l="10000" r="10000"/>')))))),
     para("case-picture", run(inline(200, 100, groupGraphic(wgp(identity(200, 100),
       picture(xfrm({ x: 100 * PT, y: 50 * PT, w: 40 * PT, h: 20 * PT }))))))),
     para("case-flip", run(inline(200, 100, groupGraphic(wgp(identity(200, 100, ' flipH="1"'), shape({
@@ -191,6 +193,7 @@ ${body}
 
   it("mirrors a picture in a flipped group", () => {
     expect(new DOMMatrix(getComputedStyle(paragraph("case-flip-picture").querySelector("img")).transform).a).toBe(-1);
+    expect(new DOMMatrix(getComputedStyle(paragraph("case-flip-cropped").querySelector("img")).transform).a).toBeLessThan(0);
   });
 
   it("fills a picture's child box with its image", () => {

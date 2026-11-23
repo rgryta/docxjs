@@ -1126,7 +1126,8 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
 
 		if (elem.srcRect && elem.srcRect.some(x => x != 0)) {
 			var [left, top, right, bottom] = elem.srcRect;
-			transform = `scale(${1 / (1 - left - right)}, ${1 / (1 - top - bottom)})`;
+			// the crop's scale goes after any flip already on the picture, so a mirrored picture stays mirrored
+			transform = `${transform ?? ''} scale(${1 / (1 - left - right)}, ${1 / (1 - top - bottom)})`;
 			result.style['clip-path'] = `rect(${(100 * top).toFixed(2)}% ${(100 * (1 - right)).toFixed(2)}% ${(100 * (1 - bottom)).toFixed(2)}% ${(100 * left).toFixed(2)}%)`;
 		}
 
