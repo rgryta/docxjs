@@ -18,6 +18,7 @@
       ["line-12pt-exact", '<w:spacing w:line="12pt" w:lineRule="exact"/>', ''],
       ["line-0.5in-atLeast", '<w:spacing w:line="0.5in" w:lineRule="atLeast"/>', ''],
       ["line-300-norule", '<w:spacing w:line="300"/>', ''],
+      ["line-1in-auto", '<w:spacing w:line="1in" w:lineRule="auto"/>', ''],
       ["line-240-exact", '<w:spacing w:line="240" w:lineRule="exact"/>', ''],
       ["line-360-atLeast", '<w:spacing w:line="360" w:lineRule="atLeast"/>', ''],
     ];
@@ -109,6 +110,10 @@
 
     it("treats a line without lineRule as auto", () => {
       expect(paragraph("line-300-norule").style.lineHeight).toBe("1.25");
+    });
+
+    it("does not collapse the lines when an auto rule carries a unit", () => {
+      expect(paragraph("line-1in-auto").style.lineHeight).toBe("");
     });
 
     it("keeps unitless and pt lengths unchanged", () => {

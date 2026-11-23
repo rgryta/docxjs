@@ -1499,7 +1499,11 @@ export class DocumentParser {
 		if (line) {
 			style["--docx-run-line-height"] = lineRule == "atLeast" ? "normal" : "initial";
 			if (lineRule == "auto") {
-				style["line-height"] = `${(parseInt(line) / 240).toFixed(2)}`;
+				// a unit (or a zero) is not a valid multiple of 240ths and would collapse the lines
+				const multiple = Number(line) / 240;
+
+				if (multiple >= 0.005)
+					style["line-height"] = multiple.toFixed(2);
 			} else {
 				const length = /(mm|cm|in|pc|pi|pt)$/.test(line) ? convertLength(line, LengthUsage.Dxa) : `${parseInt(line) / 20}pt`;
 
