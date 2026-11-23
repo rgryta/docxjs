@@ -42,6 +42,8 @@ describe("VML shapes", function () {
 
   const footer = `<w:ftr ${NS}><w:p>${pict(`<v:rect style="${PAGE}margin-top:176pt;width:50pt;height:12pt;mso-position-vertical-relative:page"/>`)}</w:p></w:ftr>`;
 
+  const header = `<w:hdr ${NS}><w:p>${pict(`<v:rect style="${PAGE}width:50pt;height:12pt;z-index:-1;mso-position-vertical-relative:page"/>`)}</w:p></w:hdr>`;
+
   async function buildDocx() {
     const zip = new JSZip();
     zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -49,6 +51,7 @@ describe("VML shapes", function () {
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
 <Default Extension="xml" ContentType="application/xml"/>
 <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
 <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
 </Types>`);
     zip.file("_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -57,13 +60,17 @@ describe("VML shapes", function () {
 </Relationships>`);
     zip.file("word/_rels/document.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rIdHeader" Type="${REL}/header" Target="header1.xml"/>
 <Relationship Id="rIdFooter" Type="${REL}/footer" Target="footer1.xml"/>
 </Relationships>`);
+    zip.file("word/header1.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+${header}`);
     zip.file("word/footer1.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${footer}`);
     zip.file("word/document.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document ${NS}><w:body>
 ${body}
 <w:sectPr>
+<w:headerReference w:type="default" r:id="rIdHeader"/>
 <w:footerReference w:type="default" r:id="rIdFooter"/>
 <w:pgSz w:w="12240" w:h="4000"/>
 <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>
@@ -168,5 +175,9 @@ ${body}
     const reason = id => paragraph(id).querySelector("[data-docx-not-drawn]")?.getAttribute("data-docx-not-drawn");
     expect(reason("case-watermark-alternate")).toBe("vml-element");
     expect(reason("case-watermark-bare")).toBe("watermark");
+  });
+
+  it("keeps a shape behind the text visible in the header", () => {
+    expect(getComputedStyle(section().querySelector("header")).zIndex).toBe("1");
   });
 });
