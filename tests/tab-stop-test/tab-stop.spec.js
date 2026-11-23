@@ -7,8 +7,8 @@ describe("tab stops", function () {
 
         await docx.renderAsync(docBlob, div, null, { experimental: true });
 
-        // updateTabStop runs on a timer after render
-        await new Promise(r => setTimeout(r, 700));
+        // measure now instead of waiting for the render timer
+        docx.remeasureTabStops(div);
 
         // the paragraph carries ind left=1440 hanging=720 and a left tab stop at 1440,
         // so the run after the tab must start exactly on the paragraph's own left indent
