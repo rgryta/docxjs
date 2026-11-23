@@ -2,6 +2,9 @@ import { WordDocument } from './word-document';
 import { DocumentParser } from './document-parser';
 import { HtmlRenderer } from './html-renderer';
 import { h } from './html';
+import { paginate } from './paginate';
+
+export { paginate };
 
 export { remeasureTabStops } from './javascript';
 
@@ -25,6 +28,7 @@ export interface Options {
 	renderChanges: boolean;
     renderComments: boolean;
     renderAltChunks: boolean;
+    paginate: boolean;
     h: typeof h;
 }
 
@@ -48,6 +52,7 @@ export const defaultOptions: Options = {
 	renderChanges: false,
     renderComments: false,
     renderAltChunks: true,
+    paginate: false,
     h: h
 };
 
@@ -73,6 +78,14 @@ export async function renderAsync(data: Blob | any, bodyContainer: HTMLElement, 
     for (let n of nodes) {
         const c = n.nodeName === "STYLE" ? styleContainer : bodyContainer;
         c.appendChild(n);
+    }
+
+    const ops = { ...defaultOptions, ...userOptions };
+
+    // Pagination measures the layout: the container must be in the document.
+    if (ops.paginate && bodyContainer.isConnected) {
+        await document.fonts?.ready;
+        paginate(bodyContainer, ops.className);
     }
     
     return doc;
