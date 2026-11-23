@@ -7,8 +7,9 @@ section.docx>article { margin-bottom: auto; z-index: 1; }
 section.docx>header, section.docx>footer { z-index: 0; }
 .docx table { border-collapse: collapse; }
 .docx table td, .docx table th { vertical-align: top; }
-.docx p { margin: 0pt; min-height: 1em; }
-.docx span { white-space: pre-wrap; overflow-wrap: break-word; }
+.docx p { margin: 0pt; min-height: 1em; --docx-run-line-height: initial; }
+.docx p.docx-continued::before { content: none; }
+.docx span { white-space: pre-wrap; overflow-wrap: break-word; line-height: var(--docx-run-line-height, inherit); }
 .docx a { color: inherit; text-decoration: inherit; }
 .docx svg { fill: transparent; }
 </style><!--docxjs document theme values--><style>.docx {
@@ -27,13 +28,18 @@ section.docx>header, section.docx>footer { z-index: 0; }
   --docx-hlink-color: #0563C1;
   --docx-folHlink-color: #954F72;
 }
-</style><!--docxjs document styles--><style>:where(.docx) span {
+</style><!--docxjs document styles--><style>:where(.docx) {
+  font-family: var(--docx-minorHAnsi-font);
+  font-size: 11.00pt;
+}
+:where(.docx) span {
   font-family: var(--docx-minorHAnsi-font);
   min-height: 11.00pt;
   font-size: 11.00pt;
 }
 .docx p {
   margin-bottom: 8.00pt;
+  --docx-run-line-height: initial;
   line-height: 1.08;
 }
 .docx p, :where(.docx) p span, p.docx_normal span {
