@@ -209,6 +209,21 @@ ${body.join("\n")}
     expectAt(run(container, "100").getBoundingClientRect().right, container, 288, "100");
   });
 
+  it("measures each section with its own zoom", async () => {
+    const container = await render([
+      paragraph(tabs(["right", 9360]), "a", "\t", "First"),
+      '<w:p><w:pPr><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:pPr></w:p>',
+      paragraph(tabs(["right", 9360]), "b", "\t", "Second"),
+    ]);
+    const [first, second] = container.querySelectorAll("section.docx");
+    second.style.zoom = "0.5";
+    docx.remeasureTabStops(container);
+
+    const from = section => section.querySelector("article").getBoundingClientRect().left;
+    expect(Math.abs(run(container, "First").getBoundingClientRect().right - from(first) - 468 * PX_PER_PT)).toBeLessThan(TOLERANCE_PX);
+    expect(Math.abs(run(container, "Second").getBoundingClientRect().right - from(second) - 468 * PX_PER_PT * 0.5)).toBeLessThan(TOLERANCE_PX);
+  });
+
   it("measures inside a zoomed wrapper", async () => {
     const container = await render(separateStops);
     container.querySelector(".docx-wrapper").style.zoom = "0.5";
