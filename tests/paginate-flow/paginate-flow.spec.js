@@ -135,9 +135,7 @@ describe("Paginate flow", function () {
       body: paras(24),
       sectPr: `<w:headerReference w:type="first" r:id="rIdF"/><w:headerReference w:type="default" r:id="rIdD"/><w:titlePg/>${PAGE}`,
       parts: [headerPart("rIdF", "First"), headerPart("rIdD", "Default")],
-    });
-
-    docx.paginate(div);
+    }, { paginate: true });
 
     const headers = pages(div).map(p => shown(p, "HEADER").map(h => h.textContent).join("|"));
     expect(headers.length).toBeGreaterThanOrEqual(3);
@@ -153,10 +151,7 @@ describe("Paginate flow", function () {
         headerPart("rIdD", "Odd"), headerPart("rIdE", "Even"),
         { id: "rIdS", type: "settings", target: "settings.xml", content: `<w:settings ${NS}><w:evenAndOddHeaders/></w:settings>` },
       ],
-    });
-    expect(pages(div).length).toBe(2);
-
-    docx.paginate(div);
+    }, { paginate: true });
 
     const headers = pages(div).map(p => shown(p, "HEADER").map(h => h.textContent).join("|"));
     expect(headers.length).toBeGreaterThanOrEqual(3);
