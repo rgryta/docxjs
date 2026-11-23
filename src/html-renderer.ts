@@ -348,12 +348,12 @@ export class HtmlRenderer {
 			}
 
 			if (this.options.renderFootnotes) {
-				const notes = this.renderNotes(this.currentFootnoteIds, this.footnoteMap);
+				const notes = this.renderNotes(this.currentFootnoteIds, this.footnoteMap, "footnotes");
 				notes && pageElement.appendChild(notes);
 			}
 
 			if (this.options.renderEndnotes && i == l - 1) {
-				const notes = this.renderNotes(this.currentEndnoteIds, this.endnoteMap);
+				const notes = this.renderNotes(this.currentEndnoteIds, this.endnoteMap, "endnotes");
 				notes && pageElement.appendChild(notes);
 			}
 
@@ -730,11 +730,13 @@ section.${c}>footer { z-index: 1; }
 		];
 	}
 
-	renderNotes(noteIds: string[], notesMap: Record<string, WmlBaseNote>) {
+	renderNotes(noteIds: string[], notesMap: Record<string, WmlBaseNote>, kind: "footnotes" | "endnotes") {
 		var notes = noteIds.map(id => notesMap[id]).filter(x => x);
 
 		if (notes.length > 0) {
-			return this.h({ tagName: "ol", children: this.renderElements(notes) });
+			const list = this.h({ tagName: "ol", children: this.renderElements(notes) }) as HTMLElement;
+			list.setAttribute("data-docx-notes", kind);  // paginate keeps footnotes on the page of their references
+			return list;
 		}
 	}
 
@@ -1101,7 +1103,9 @@ section.${c}>footer { z-index: 1; }
 
 	renderFootnoteReference(elem: WmlNoteReference) {
 		this.currentFootnoteIds.push(elem.id);
-		return this.h({ tagName: "sup", children: [`${this.currentFootnoteIds.length}`] });
+		const ref = this.h({ tagName: "sup", children: [`${this.currentFootnoteIds.length}`] }) as HTMLElement;
+		ref.setAttribute("data-docx-footnote", "");
+		return ref;
 	}
 
 	renderEndnoteReference(elem: WmlNoteReference) {

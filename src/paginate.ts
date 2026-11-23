@@ -64,16 +64,42 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	if (limitY - articles[0].getBoundingClientRect().top < MIN_SPLIT_HEIGHT)
 		return null;
 
+	// A footnote list stays on the page with its references: the page keeps as many notes as it keeps
+	// references, and the body gives up room for them. The other notes move to a list on the next page.
+	const footnotes = children.find(c => c.tagName === "OL" && c.dataset.docxNotes === "footnotes");
+	const items = footnotes ? Array.from(footnotes.children) as HTMLElement[] : [];
+	const refs = footnotes ? articles.flatMap(a => Array.from(a.querySelectorAll<HTMLElement>("sup[data-docx-footnote]"))) : [];
+	let keptNotes = items.length;
+	let notesLimit = limitY;
+
+	if (items.length && refs.length) {
+		const chrome = outerHeight(footnotes) - (items[items.length - 1].getBoundingClientRect().bottom - items[0].getBoundingClientRect().top);
+		keptNotes = 0;
+
+		for (let k = Math.min(items.length, refs.length); k > 0; k--) {
+			const limit = limitY - chrome - (items[k - 1].getBoundingClientRect().bottom - items[0].getBoundingClientRect().top);
+
+			if (limit - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT && refs.filter(r => r.getBoundingClientRect().bottom <= limit).length >= k) {
+				keptNotes = k;
+				notesLimit = limit;
+				break;
+			}
+		}
+	} else if (items.length && limitY - outerHeight(footnotes) - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT) {
+		notesLimit = limitY - outerHeight(footnotes);  // notes carried over from the page before keep their room
+	}
+
 	const flow = [
 		...articles.flatMap(article => (Array.from(article.children) as HTMLElement[]).map(block => ({ block, article }))),
-		...children.filter(c => c.tagName === "OL").map(block => ({ block, article: null as HTMLElement })),
+		...children.filter(c => c.tagName === "OL" && c !== footnotes).map(block => ({ block, article: null as HTMLElement })),
 	];
 	// Empty paragraphs (such as the one holding a page break) never start a page.
 	// the page also grows by the last block's bottom margin: margins do not collapse in the page's flex column
 	const last = flow[flow.length - 1].block;
 	const end = (block: HTMLElement) => block.getBoundingClientRect().bottom + (block === last ? parseFloat(getComputedStyle(block).marginBottom) || 0 : 0);
-	let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > limitY);
-	let splitLimit = limitY;
+	const bodyEnd = notesLimit;
+	let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > bodyEnd);
+	let splitLimit = bodyEnd;
 	let keepNotes = false;
 
 	// Notes that do not fit push the last body lines down, as in Word, instead of taking a page of their own.
@@ -88,7 +114,7 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 		}
 	}
 
-	if (over < 0) {
+	if (over < 0 && keptNotes == items.length) {
 		for (const f of flow) {
 			if (f.article && isBlank(f.block) && f.block.getBoundingClientRect().bottom > limitY)
 				f.block.style.display = "none";
@@ -97,25 +123,25 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 		return null;
 	}
 
-	const overArticle = flow[over].article;
-	let cut = over;
+	const overArticle = over < 0 ? null : flow[over].article;
+	let cut = over < 0 ? flow.length : over;
 	let carry: HTMLElement = null;
 
-	if (flow[over].block.tagName === "TABLE")
+	if (over >= 0 && flow[over].block.tagName === "TABLE")
 		carry = splitTable(flow[over].block as HTMLTableElement, splitLimit);
-	else if (flow[over].block.tagName === "P")
+	else if (over >= 0 && flow[over].block.tagName === "P")
 		carry = splitParagraph(flow[over].block, splitLimit, className);
 
 	if (carry) {
 		cut = over + 1;
-	} else {
+	} else if (over >= 0) {
 		while (cut > 0 && flow[cut - 1].article === overArticle && overArticle && getComputedStyle(flow[cut - 1].block).breakAfter === "avoid")
 			cut--;
 
 		if (cut === 0)
 			cut = over || 1;
 
-		if (cut >= flow.length)
+		if (cut >= flow.length && keptNotes == items.length)
 			return null;  // a single block taller than a page stays where it is
 	}
 
@@ -148,6 +174,17 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 			rest.append(...blocks);
 			next.appendChild(rest);
 		}
+	}
+
+	if (keptNotes < items.length) {
+		const rest = keptNotes ? footnotes.cloneNode(false) as HTMLElement : footnotes;
+
+		if (keptNotes) {
+			rest.setAttribute("start", String(Number(footnotes.getAttribute("start") ?? 1) + keptNotes));
+			rest.append(...items.slice(keptNotes));
+		}
+
+		next.appendChild(rest);
 	}
 
 	next.append(...notes);

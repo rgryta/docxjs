@@ -45,8 +45,8 @@
   const fits = (page) => page.getBoundingClientRect().height <= pageHeight(page) + 1;
   const shown = (page, tag) => Array.from(page.children).filter(c => c.tagName === tag && getComputedStyle(c).display !== "none");
 
-  function flowText(div) {
-    return Array.from(div.querySelectorAll("section.docx > article, section.docx > ol")).map(el => {
+  function flowText(div, parts = "section.docx > article, section.docx > ol") {
+    return Array.from(div.querySelectorAll(parts)).map(el => {
       const copy = el.cloneNode(true);
       copy.querySelectorAll("[data-docx-repeat]").forEach(r => r.remove());
       return copy.textContent;
@@ -159,19 +159,42 @@
       headers.forEach((text, i) => expect(text).toBe(i % 2 ? "Even" : "Odd"));
     });
 
-    it("keeps one notes list, on the page after the last body block", async () => {
+    it("keeps a footnote on the page of its reference", async () => {
       div = await render({
         body: `<w:p>${run(lorem(2))}<w:r><w:footnoteReference w:id="1"/></w:r></w:p>` + paras(24),
         parts: [{ id: "rIdN", type: "footnotes", target: "footnotes.xml", content: `<w:footnotes ${NS}><w:footnote w:id="1">${para("Note")}</w:footnote></w:footnotes>` }],
       });
-      const before = flowText(div);
+      const bodyBefore = flowText(div, "section.docx > article");
 
       docx.paginate(div);
 
       expect(pages(div).length).toBeGreaterThanOrEqual(3);
       expect(div.querySelectorAll("section.docx > ol").length).toBe(1);
-      expect(flowText(div)).toBe(before);
+      expect(pages(div)[0].querySelector(":scope > ol")).not.toBeNull();
+      expect(flowText(div, "section.docx > article")).toBe(bodyBefore);
       pages(div).forEach(page => expect(fits(page)).toBe(true));
+    });
+
+    it("splits the footnotes by where their references end up", async () => {
+      for (let count = 30; count <= 50; count += 4) {
+        div?.remove();
+        div = await render({
+          body: `<w:p>${run("First")}<w:r><w:footnoteReference w:id="1"/></w:r></w:p>` + paras(count, 1)
+            + `<w:p>${run("Last")}<w:r><w:footnoteReference w:id="2"/></w:r></w:p>`,
+          parts: [{ id: "rIdN", type: "footnotes", target: "footnotes.xml", content: `<w:footnotes ${NS}><w:footnote w:id="1">${para("One")}</w:footnote><w:footnote w:id="2">${para("Two")}</w:footnote></w:footnotes>` }],
+        });
+
+        docx.paginate(div);
+
+        for (const page of pages(div)) {
+          const list = page.querySelector(":scope > ol");
+          const refs = Array.from(page.querySelectorAll("article sup")).map(s => Number(s.textContent));
+          const start = list ? Number(list.getAttribute("start") ?? 1) : null;
+          if (list)
+            expect(refs).withContext(`${count} paragraphs`).toEqual(Array.from(list.children, (_, i) => start + i));
+          expect(fits(page)).withContext(`${count} paragraphs`).toBe(true);
+        }
+      }
     });
 
     it("pushes body lines down instead of giving the notes a page of their own", async () => {
@@ -205,21 +228,21 @@
       }
     });
 
-    it("splits the pages before a notes list taller than a page", async () => {
+    it("moves a notes list taller than a page to the page after its reference", async () => {
       div = await render({
         body: `<w:p>${run(lorem(2))}<w:r><w:footnoteReference w:id="1"/></w:r></w:p>` + paras(24),
         parts: [{ id: "rIdN", type: "footnotes", target: "footnotes.xml", content: `<w:footnotes ${NS}><w:footnote w:id="1">${paras(30)}</w:footnote></w:footnotes>` }],
       });
-      const before = flowText(div);
+      const before = div.cloneNode(true);
 
       docx.paginate(div);
 
       const all = pages(div);
       const notesPage = all.findIndex(p => p.querySelector(":scope > ol"));
       expect(div.querySelectorAll("section.docx > ol").length).toBe(1);
-      expect(notesPage).toBeGreaterThanOrEqual(2);
-      all.slice(0, notesPage).forEach(page => expect(fits(page)).toBe(true));
-      expect(flowText(div)).toBe(before);
+      expect(notesPage).toBe(1);
+      expect(fits(all[0])).toBe(true);
+      expect(flowText(div, "section.docx > article")).toBe(flowText(before, "section.docx > article"));
     });
 
     it("continues a vertically merged cell on the next page in its own column", async () => {
