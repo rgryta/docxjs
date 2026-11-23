@@ -537,7 +537,7 @@ export class DocumentParser {
 					break;
 
 				case "ins":
-					result.children.push(this.parseChange(DomType.Inserted, el, e => this.parseParagraph(e, false)));
+					result.children.push(this.parseChange(DomType.Inserted, el, e => this.parseParagraph(e)));
 					break;
 
 				case "del":

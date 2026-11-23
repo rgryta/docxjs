@@ -188,6 +188,14 @@ describe("Page fields and section breaks", function () {
     expect(shownText(div, "FOOTER")).toEqual(["7"]);
   });
 
+  it("fills a PAGE field inside a tracked insertion", async () => {
+    const inserted = `<w:ins w:id="1" w:author="a" w:date="2020-01-01T00:00:00Z">${field("PAGE", "9")}</w:ins>`;
+    div = await render({ body: para("A") + pageBreak + para("B"), sectPr: FOOTER + PAGE, parts: [part("rIdF", [`<w:p>${inserted}</w:p>`])] });
+
+    expect(docx.paginate(div)).toBe(true);
+    expect(shownText(div, "FOOTER")).toEqual(["1", "2"]);
+  });
+
   it("writes the number into a field result run that has no text", async () => {
     const empty = r(fld("begin")) + r(instr("PAGE")) + r(fld("separate")) + "<w:r><w:rPr><w:b/></w:rPr></w:r>" + r(fld("end"));
     div = await render({ body: para("A"), sectPr: FOOTER + PAGE, parts: [part("rIdF", [`<w:p>${empty}</w:p>`])] });
