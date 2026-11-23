@@ -458,7 +458,8 @@ export class HtmlRenderer {
 				const s = this.findStyle(p.styleName);
 
 				if (p.pageBreakBefore || s?.paragraphProps?.pageBreakBefore) {
-					current.sectProps = sectProps;
+					// sectProps may still hold an earlier section's props; leave the piece to the backward fill below
+					current.sectProps = null;
 					current.pageBreak = true;
 					current = { sectProps: null, elements: [], pageBreak: false };
 					result.push(current);
