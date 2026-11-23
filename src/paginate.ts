@@ -45,7 +45,7 @@ function splitPages(pages: HTMLElement[], className: string, deadline: number): 
 			return false;
 
 		// Pages before i are final, so i is this page's final position.
-		number = pageNumber(pages[i], number);
+		[number] = pageNumber(pages[i], number);
 		showHeaderFooter(pages[i], number);
 		const next = splitPage(pages[i], className);
 
@@ -56,9 +56,44 @@ function splitPages(pages: HTMLElement[], className: string, deadline: number): 
 	return true;
 }
 
-function pageNumber(page: HTMLElement, previous: number): number {
+/**
+ * The page's number, and whether Word puts a blank page before it: an odd- or even-page section
+ * that would start on the wrong side gets one, which takes a number but is not rendered.
+ */
+function pageNumber(page: HTMLElement, previous: number): [number, boolean] {
 	const start = page.getAttribute("data-page-start");
-	return start === null ? previous + 1 : Number(start);
+	const number = start === null ? previous + 1 : Number(start);
+	const parity = page.getAttribute("data-page-parity");
+	const blank = !!parity && (number % 2 == 0) != (parity == "even");
+	return [blank ? number + 1 : number, blank];
+}
+
+/** The page number in the section's format, or null for a format it does not write (the field keeps its saved text). */
+function formatPageNumber(number: number, format: string): string {
+	const letter = (base: number) => String.fromCharCode(base + (number - 1) % 26).repeat(Math.ceil(number / 26));
+
+	switch (format) {
+		case null: return String(number);
+		case "upperRoman": return roman(number);
+		case "lowerRoman": return roman(number).toLowerCase();
+		case "upperLetter": return number > 0 ? letter(65) : null;
+		case "lowerLetter": return number > 0 ? letter(97) : null;
+		default: return null;
+	}
+}
+
+function roman(number: number): string {
+	if (!(number > 0 && number < 4000))
+		return String(number);
+
+	const digits: [number, string][] = [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]];
+	let result = "";
+
+	for (const [value, text] of digits)
+		for (; number >= value; number -= value)
+			result += text;
+
+	return result;
 }
 
 /**
@@ -74,17 +109,24 @@ function fillPages(pages: HTMLElement[], withCount: boolean): boolean {
 		return setFieldText(field, text) && before != text.length;
 	};
 
-	for (const page of pages) {
-		number = pageNumber(page, number);
+	const numbers = pages.map(page => {
+		const [value, blank] = pageNumber(page, number);
+		number = value;
+		return { value, blank };
+	});
+	const count = String(pages.length + numbers.filter(n => n.blank).length);
 
-		if (!page.hasAttribute("data-page-format"))
-			fields(page, "PAGE").forEach(f => changed = fill(f, String(number)) || changed);
+	pages.forEach((page, i) => {
+		const text = formatPageNumber(numbers[i].value, page.getAttribute("data-page-format"));
+
+		if (text != null)
+			fields(page, "PAGE").forEach(f => changed = fill(f, text) || changed);
 
 		if (withCount)
-			fields(page, "NUMPAGES").forEach(f => changed = fill(f, String(pages.length)) || changed);
+			fields(page, "NUMPAGES").forEach(f => changed = fill(f, count) || changed);
 
-		showHeaderFooter(page, number);
-	}
+		showHeaderFooter(page, numbers[i].value);
+	});
 
 	return changed;
 }
@@ -247,6 +289,7 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	const next = page.cloneNode(false) as HTMLElement;
 	next.removeAttribute("data-docx-first-page");
 	next.removeAttribute("data-page-start");
+	next.removeAttribute("data-page-parity");
 
 	for (const c of children) {
 		if (c.tagName === "HEADER" && c.dataset.docxHf !== "first")
