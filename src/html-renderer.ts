@@ -531,19 +531,21 @@ export class HtmlRenderer {
 		const result: Section[][] = [current];
 
 		for (let s of sections) {
-			if (s.elements.length) {
-				if (prev && (pageBreak || this.isPageBreakSection(prev.sectProps, s.sectProps) || this.isNewPageSection(prev.sectProps, s.sectProps)))
-					result.push(current = []);
-
-				prev = s;
-				pageBreak = false;
+			// an empty piece can carry the next section's props, which would give the open page that section's footer
+			if (!s.elements.length) {
+				pageBreak ||= s.pageBreak;
+				continue;
 			}
 
+			if (prev && (pageBreak || this.isPageBreakSection(prev.sectProps, s.sectProps) || this.isNewPageSection(prev.sectProps, s.sectProps)))
+				result.push(current = []);
+
+			prev = s;
 			current.push(s);
-			pageBreak ||= s.pageBreak;
+			pageBreak = s.pageBreak;
 		}
 
-		return result.filter(x => x.length > 0);
+		return current.length ? result : [[sections[0]]];
 	}
 
 	renderWrapper(children: HTMLElement[]) {
