@@ -64,20 +64,25 @@ function pageNumber(page: HTMLElement, previous: number): number {
 
 /**
  * Sets each page's PAGE fields to its number (unless its section numbers pages in another format)
- * and, with withCount, each NUMPAGES field to the page count. Returns true when any text changed.
+ * and, with withCount, each NUMPAGES field to the page count. Returns true when a text changed its
+ * length, because only then can the page layout change.
  */
 function fillPages(pages: HTMLElement[], withCount: boolean): boolean {
 	let number = 0;
 	let changed = false;
+	const fill = (field: HTMLElement, text: string) => {
+		const before = field.textContent.length;
+		return setFieldText(field, text) && before != text.length;
+	};
 
 	for (const page of pages) {
 		number = pageNumber(page, number);
 
 		if (!page.hasAttribute("data-page-format"))
-			fields(page, "PAGE").forEach(f => changed = setFieldText(f, String(number)) || changed);
+			fields(page, "PAGE").forEach(f => changed = fill(f, String(number)) || changed);
 
 		if (withCount)
-			fields(page, "NUMPAGES").forEach(f => changed = setFieldText(f, String(pages.length)) || changed);
+			fields(page, "NUMPAGES").forEach(f => changed = fill(f, String(pages.length)) || changed);
 
 		showHeaderFooter(page, number);
 	}
