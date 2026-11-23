@@ -3,7 +3,7 @@ import { convertLength, LengthUsage } from '../document/common';
 import { OpenXmlElementBase, DomType, OpenXmlElement } from '../document/dom';
 import xml from '../parser/xml-parser';
 import { clamp, strictInteger } from '../utils';
-import { arrowHead, DrawingGroup, GroupFrame, groupFrame, GroupPlace, integerPair, placeChild } from '../drawing/group';
+import { arrowBase, arrowHead, DrawingGroup, GroupFrame, groupFrame, GroupPlace, integerPair, placeChild } from '../drawing/group';
 
 const vmlNamespace = "urn:schemas-microsoft-com:vml";
 
@@ -298,6 +298,8 @@ function lineHeads(stroke: Element, line: Record<string, string>, box: VmlBox, p
 
 		const scale = (name: string) => arrowScale[(xml.attr(stroke, `${["start", "end"][i]}arrow${name}`) ?? "").trim().toLowerCase()] ?? 3;
 		const d = arrowHead(ends[i], ends[1 - i], paint.strokeWidth, scale("width"), scale("length"));
+		const [bx, by] = arrowBase(ends[i], ends[1 - i], paint.strokeWidth, scale("length"));
+		Object.assign(line, i ? { x2: formatNumber(bx), y2: formatNumber(by) } : { x1: formatNumber(bx), y1: formatNumber(by) });
 		return [{ tagName: "path", attrs: { d, fill: paint.stroke, stroke: "none" } }];
 	});
 }
