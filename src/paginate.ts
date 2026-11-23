@@ -8,7 +8,7 @@
 // loaded. renderAsync runs it with the `paginate` option; call it yourself
 // after renderDocument when you insert the nodes elsewhere.
 
-import { cloneWithTabStops } from "./javascript";
+import { cloneWithTabStops, remeasureTabStops } from "./javascript";
 
 const MAX_PAGES = 2000;
 const MIN_SPLIT_HEIGHT = 24;
@@ -36,6 +36,8 @@ export function paginate(root: HTMLElement, className: string = "docx", options?
 			fillPages(pages, done);
 	}
 
+	// pages shown or cloned by the split were hidden or absent when the tabs were first measured
+	remeasureTabStops(root, className);
 	return done;
 }
 
