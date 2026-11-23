@@ -4756,7 +4756,7 @@ section.${c}>footer { z-index: 1; }
         let transform = elem.cssStyle?.transform;
         if (elem.srcRect && elem.srcRect.some(x => x != 0)) {
             var [left, top, right, bottom] = elem.srcRect;
-            transform = `scale(${1 / (1 - left - right)}, ${1 / (1 - top - bottom)})`;
+            transform = `${transform ?? ''} scale(${1 / (1 - left - right)}, ${1 / (1 - top - bottom)})`;
             result.style['clip-path'] = `rect(${(100 * top).toFixed(2)}% ${(100 * (1 - right)).toFixed(2)}% ${(100 * (1 - bottom)).toFixed(2)}% ${(100 * left).toFixed(2)}%)`;
         }
         if (elem.rotation)
@@ -5402,7 +5402,7 @@ function splitPages(pages, className, deadline) {
             return false;
         [number] = pageNumber(pages[i], number);
         showHeaderFooter(pages[i], number);
-        const next = splitPage(pages[i], className);
+        const next = splitPage(pages[i], className, number + 1);
         if (next)
             pages.splice(i + 1, 0, next);
     }
@@ -5484,7 +5484,7 @@ function setFieldText(field, text) {
         (field.firstElementChild ?? field).appendChild(document.createTextNode(text));
     return field.textContent != before;
 }
-function splitPage(page, className = "docx") {
+function splitPage(page, className = "docx", nextNumber) {
     const children = Array.from(page.children);
     const articles = children.filter(c => c.tagName === "ARTICLE");
     if (!articles.length)
@@ -5549,7 +5549,7 @@ function splitPage(page, className = "docx") {
         carry = splitTable(flow[over].block, splitLimit);
     else if (over >= 0 && flow[over].block.tagName === "P")
         carry = splitParagraph(flow[over].block, splitLimit, className);
-    const stays = over >= 0 && !carry && unbreakableHeight(flow[over].block) > Math.max(pageSpace, pageSpace + headerFooterSaving(children));
+    const stays = over >= 0 && !carry && unbreakableHeight(flow[over].block) > Math.max(pageSpace, pageSpace + headerFooterSaving(children, nextNumber));
     if (carry || stays) {
         cut = over + 1;
     }
@@ -5622,12 +5622,15 @@ function showHeaderFooter(page, number) {
         }
     }
 }
-function headerFooterSaving(children) {
+function headerFooterSaving(children, nextNumber) {
     let saving = 0;
     for (const tag of ["HEADER", "FOOTER"]) {
         const shown = children.find(c => c.tagName === tag && getComputedStyle(c).display !== "none");
         const next = children.filter(c => c.tagName === tag && c.dataset.docxHf !== "first");
-        saving += (shown ? outerHeight(shown) : 0) - (next.length ? Math.min(...next.map(shownHeight)) : 0);
+        const find = (type) => next.find(c => c.dataset.docxHf === type);
+        const pick = nextNumber == null ? null : (nextNumber % 2 == 0 ? find("even") : null) ?? find("default");
+        const height = pick ? shownHeight(pick) : next.length ? Math.min(...next.map(shownHeight)) : 0;
+        saving += (shown ? outerHeight(shown) : 0) - height;
     }
     return saving;
 }

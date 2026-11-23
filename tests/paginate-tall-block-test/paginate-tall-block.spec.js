@@ -20,20 +20,28 @@
     + `<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name=""/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdPic"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>`
     + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${w * EMU}" cy="${h * EMU}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
 
-  function build(body, footnotes = null, firstHeaderLines = 0) {
+  const exactLines = (count, label) => Array.from({ length: count }, (_, i) =>
+    `<w:p><w:pPr><w:spacing w:line="280" w:lineRule="exact"/></w:pPr><w:r><w:t>${label} ${i}</w:t></w:r></w:p>`).join("");
+
+  function build(body, footnotes = null, firstHeaderLines = 0, evenHeaderLines = 0) {
     const zip = new JSZip();
     zip.file("_rels/.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="' + REL + 'officeDocument" Target="word/document.xml"/></Relationships>');
-    const titlePage = firstHeaderLines ? '<w:headerReference w:type="first" r:id="rIdHF"/><w:titlePg/>' : "";
+    const titlePage = (firstHeaderLines ? '<w:headerReference w:type="first" r:id="rIdHF"/><w:titlePg/>' : "")
+      + (evenHeaderLines ? '<w:headerReference w:type="even" r:id="rIdHE"/>' : "");
     zip.file("word/document.xml", `<w:document ${NS}><w:body>${body}<w:sectPr>${LANDSCAPE}${titlePage}</w:sectPr></w:body></w:document>`);
     zip.file("word/_rels/document.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
       + `<Relationship Id="rIdH" Type="${REL}header" Target="header1.xml"/><Relationship Id="rIdF" Type="${REL}footer" Target="footer1.xml"/>`
       + (footnotes ? `<Relationship Id="rIdN" Type="${REL}footnotes" Target="footnotes.xml"/>` : "")
       + (firstHeaderLines ? `<Relationship Id="rIdHF" Type="${REL}header" Target="header2.xml"/>` : "")
+      + (evenHeaderLines ? `<Relationship Id="rIdHE" Type="${REL}header" Target="header3.xml"/><Relationship Id="rIdS" Type="${REL}settings" Target="settings.xml"/>` : "")
       + `<Relationship Id="rIdPic" Type="${REL}image" Target="media/p.png"/></Relationships>`);
     zip.file("word/media/p.png", PNG, { base64: true });
     if (firstHeaderLines)
-      zip.file("word/header2.xml", `<w:hdr ${NS}>${Array.from({ length: firstHeaderLines }, (_, i) =>
-        `<w:p><w:pPr><w:spacing w:line="280" w:lineRule="exact"/></w:pPr><w:r><w:t>Letterhead ${i}</w:t></w:r></w:p>`).join("")}</w:hdr>`);
+      zip.file("word/header2.xml", `<w:hdr ${NS}>${exactLines(firstHeaderLines, "Letterhead")}</w:hdr>`);
+    if (evenHeaderLines) {
+      zip.file("word/header3.xml", `<w:hdr ${NS}>${exactLines(evenHeaderLines, "Even")}</w:hdr>`);
+      zip.file("word/settings.xml", `<w:settings ${NS}><w:evenAndOddHeaders/></w:settings>`);
+    }
     if (footnotes)
       zip.file("word/footnotes.xml", `<w:footnotes ${NS}><w:footnote w:id="1">${para(footnotes)}</w:footnote></w:footnotes>`);
     zip.file("word/header1.xml", part("hdr", "Header"));
@@ -81,6 +89,18 @@
       expect(pages.length).toBe(2);
       expect(tall.closest("section.docx")).toBe(pages[1]);
       expect(pages[1].getBoundingClientRect().height).toBeLessThanOrEqual(parseFloat(getComputedStyle(pages[1]).minHeight) + 1);
+    });
+
+    it("measures the next page's room with the header that page shows", async () => {
+      // first page 210pt of letterhead, even pages 140pt, default 14pt: page 1 holds about 320pt, page 2 (even) about 390pt, a default page about 500pt
+      const tallRow = `<w:tr><w:trPr><w:trHeight w:val="9000" w:hRule="exact"/></w:trPr>${[para("a"), para("b"), para("c")].map(cell).join("")}</w:tr>`;
+
+      div = document.createElement("div");
+      document.body.appendChild(div);
+      await docx.renderAsync(await build(para("Title") + table(tallRow), null, 15, 10), div, null, { ignoreLastRenderedPageBreak: true, experimental: true, paginate: true });
+
+      const pages = Array.from(div.querySelectorAll("section.docx"));
+      expect(div.querySelector("article > table").closest("section.docx")).toBe(pages[0]);
     });
 
     it("moves a picture-only paragraph taller than a page to a new page", async () => {
