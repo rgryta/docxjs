@@ -80,6 +80,7 @@ describe("DrawingML shapes", function () {
     para("case-pic-behind", run(anchor({ h: posH("page", offset(72)), v: posV("paragraph", offset(0)), behind: 1 }, picture))),
     para("case-choice-empty", run(alternate('<mc:Choice Requires="wps"/>', ovalFallback))),
     para("case-choice-blank", run(alternate(rectChoice(""), ovalFallback))),
+    para("case-choice-two", run(alternate(`<mc:Choice Requires="wps">${inline(20, 10, shapeGraphic(wsp()))}${inline(20, 10, shapeGraphic(wsp()))}</mc:Choice>`, ovalFallback))),
     para("case-choice-local", run(alternate(rectChoice("wq", ` xmlns:wq="${SHAPE_NS}"`), ovalFallback))),
     para("case-choice-wordart", run(alternate(`<mc:Choice Requires="wps">${inline(20, 10, shapeGraphic(wsp({
       bodyPr: '<wps:bodyPr><a:prstTxWarp prst="textArchUp"><a:avLst/></a:prstTxWarp></wps:bodyPr>',
@@ -267,6 +268,7 @@ ${body}
     expect(branch("case-choice-empty")).toBe("fallback");
     expect(branch("case-choice-blank")).toBe("fallback");
     expect(branch("case-choice-local")).toBe("choice");
+    expect(branch("case-choice-two")).toBe("fallback");
     expect(branch("case-choice-wordart")).toBe("fallback");
     expect(reasons(paragraph("case-choice-empty"))).toEqual([]);
   });
