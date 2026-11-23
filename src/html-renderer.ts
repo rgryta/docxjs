@@ -1471,7 +1471,6 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
 		if (float) {
 			set("float", float.side);
 			set(float.side == "left" ? "margin-left" : "margin-right", pt(float.margin));
-			set("display", "block");
 		} else if (placed && left != null)
 			set("left", left);
 		else if (left != null)
