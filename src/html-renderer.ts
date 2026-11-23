@@ -343,7 +343,10 @@ export class HtmlRenderer {
 				pageElement.setAttribute("data-page-start", String(pageNumber.start));
 
 			if (pageNumber?.chapStyle || pageNumber?.format && pageNumber.format != "decimal")
-				pageElement.setAttribute("data-page-format", "other");
+				pageElement.setAttribute("data-page-format", pageNumber.chapStyle ? "other" : pageNumber.format);
+
+			if (prevProps != props && (props?.type == SectionType.EvenPage || props?.type == SectionType.OddPage))
+				pageElement.setAttribute("data-page-parity", props.type == SectionType.EvenPage ? "even" : "odd");
 
 			this.options.renderHeaders && this.renderHeaderFooter(props.headerRefs, props,
 				result.length, prevProps != props, pageElement);
