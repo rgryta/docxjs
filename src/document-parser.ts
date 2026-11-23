@@ -1383,7 +1383,7 @@ export class DocumentParser {
 					break;
 
 				case "suppressAutoHyphens":
-					style["hyphens"] = xml.boolAttr(c, "val", true) ? "none" : "auto";
+					style["hyphens"] = xml.boolAttr(c, "val", true) ? "none" : "inherit";
 					break;
 
 				case "lang":
