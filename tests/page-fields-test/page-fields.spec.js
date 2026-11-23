@@ -191,9 +191,8 @@ describe("Page fields and section breaks", function () {
         part("rIdF", [para("odd")]), part("rIdE", [para("even")]),
         { id: "rIdS", type: "settings", target: "settings.xml", content: `<w:settings ${NS}><w:evenAndOddHeaders/></w:settings>` },
       ],
-    });
+    }, { paginate: true });
 
-    expect(docx.paginate(div)).toBe(true);
     expect(shownText(div, "FOOTER")).toEqual(["even", "odd"]);
   });
 
