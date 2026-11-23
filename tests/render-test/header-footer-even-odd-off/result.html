@@ -7,9 +7,10 @@ section.docx>article { margin-bottom: auto; z-index: 1; }
 section.docx>header, section.docx>footer { z-index: 0; }
 .docx table { border-collapse: collapse; }
 .docx table td, .docx table th { vertical-align: top; }
-.docx p { margin: 0pt; min-height: 1em; }
-.docx span { white-space: pre-wrap; overflow-wrap: break-word; }
+.docx p { margin: 0pt; min-height: 1em; --docx-run-line-height: initial; }
+.docx p.docx-continued::before { content: none; }
+.docx span { white-space: pre-wrap; overflow-wrap: break-word; line-height: var(--docx-run-line-height, inherit); }
 .docx a { color: inherit; text-decoration: inherit; }
 .docx svg { fill: transparent; }
 section.docx { font-size: 10pt; }
-</style><div class="docx-wrapper"><section class="docx" style="padding: 72pt; width: 612pt; min-height: 792pt;"><header style="margin-top: calc(-48.8px); min-height: calc(48.8px);"><p><span>Default header</span></p></header><article><p><span>Page one</span><span></span></p></article></section><section class="docx" style="padding: 72pt; width: 612pt; min-height: 792pt;"><header style="margin-top: calc(-48.8px); min-height: calc(48.8px);"><p><span>Default header</span></p></header><article><p><span>Page two</span><span></span></p></article></section><section class="docx" style="padding: 72pt; width: 612pt; min-height: 792pt;"><header style="margin-top: calc(-48.8px); min-height: calc(48.8px);"><p><span>Default header</span></p></header><article><p><span>Page three</span></p></article></section></div>
+</style><div class="docx-wrapper"><section class="docx" style="padding: 72pt; width: 612pt; min-height: 792pt;"><header data-docx-hf="default" style="margin-top: calc(-48.8px); min-height: calc(48.8px);"><p><span>Default header</span></p></header><article><p><span>Page one</span><span></span></p></article></section><section class="docx" style="padding: 72pt; width: 612pt; min-height: 792pt;"><header data-docx-hf="default" style="margin-top: calc(-48.8px); min-height: calc(48.8px);"><p><span>Default header</span></p></header><article><p><span>Page two</span><span></span></p></article></section><section class="docx" style="padding: 72pt; width: 612pt; min-height: 792pt;"><header data-docx-hf="default" style="margin-top: calc(-48.8px); min-height: calc(48.8px);"><p><span>Default header</span></p></header><article><p><span>Page three</span></p></article></section></div>
