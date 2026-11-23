@@ -34,6 +34,7 @@ describe("VML shapes", function () {
       pict('<v:polyline points="0,0 10,10"/>'),
       pict('<v:shape style="width:10pt;height:10pt"/>'),
       pict('<v:shape type="#missing" style="width:10pt;height:10pt"/>')),
+    para("case-picture-no-type", pict('<v:shape type="#missing" style="width:10pt;height:10pt"><v:imagedata r:id="rIdMissing"/></v:shape>')),
     para("case-watermark-alternate",
       `<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing/></mc:Choice><mc:Fallback>${`<w:pict>${textPath}</w:pict>`}</mc:Fallback></mc:AlternateContent></w:r>`),
     para("case-watermark-bare", pict(textPath)),
@@ -179,5 +180,10 @@ ${body}
 
   it("keeps a shape behind the text visible in the header", () => {
     expect(getComputedStyle(section().querySelector("header")).zIndex).toBe("1");
+  });
+
+  it("does not mark a picture shape whose shape type is missing", () => {
+    const reasons = Array.from(paragraph("case-picture-no-type").querySelectorAll("[data-docx-not-drawn]")).map(e => e.getAttribute("data-docx-not-drawn"));
+    expect(reasons).not.toContain("vml-type");
   });
 });

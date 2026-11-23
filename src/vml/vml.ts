@@ -93,8 +93,11 @@ export function parseVmlElement(elem: Element, parser: DocumentParser, watermark
 	if (typeRef) {
 		shapeType = typeRef.startsWith("#") ? parser.vmlShapeTypes.get(typeRef.substring(1)) : undefined;
 
-		if (!shapeType)
+		// a picture needs no shape type
+		if (!shapeType && !xml.elements(elem).some(el => el.localName == "imagedata"))
 			return notDrawn("vml-type");
+
+		shapeType ??= {};
 	}
 
 	const result = new VmlElement();
