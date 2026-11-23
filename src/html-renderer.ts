@@ -1341,7 +1341,7 @@ section.${c}>footer { z-index: 1; }
 			set("margin-top", pt(box.y));
 		} else if (box.position == "absolute") {
 			set("position", "absolute");
-			const left = vmlEdge(vmlHorizontalFrames, box.hRelative, box.hAlign, box.x, box.width);
+			const left = vmlEdge(vmlHorizontalFrames, box.hRelative ?? "text", box.hAlign, box.x, box.width);
 			const top = vmlEdge(vmlVerticalFrames, box.vRelative, box.vAlign, box.y, box.height);
 
 			if (left == null)
