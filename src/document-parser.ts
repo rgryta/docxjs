@@ -861,6 +861,11 @@ export class DocumentParser {
 	parseDrawingWrapper(node: Element): OpenXmlElement {
 		var result = <OpenXmlElement>{ type: DomType.Drawing, children: [], cssStyle: {} };
 		var isAnchor = node.localName == "anchor";
+		const docPr = xml.element(node, "docPr");
+
+		// a drawing the author hid in Word's selection pane is not shown, whatever its wrapping
+		if (docPr && xml.boolAttr(docPr, "hidden", false))
+			return null;
 
 		//TODO
 		// result.style["margin-left"] = xml.sizeAttr(node, "distL", SizeType.Emu);
