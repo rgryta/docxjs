@@ -167,6 +167,23 @@ describe("Page fields and section breaks", function () {
     expect(tablePage.style.width).toBe("792pt");
   });
 
+  it("shows one number for a field whose result is a tracked change", async () => {
+    const tracked = r(fld("begin")) + r(instr("PAGE")) + r(fld("separate"))
+      + '<w:ins w:id="1" w:author="a" w:date="2020-01-01T00:00:00Z"><w:r><w:t>7</w:t></w:r></w:ins>' + r(fld("end"));
+    div = await render({ body: para("A"), sectPr: FOOTER + PAGE, parts: [part("rIdF", [`<w:p>${tracked}</w:p>`])] });
+
+    expect(docx.paginate(div)).toBe(true);
+    expect(shownText(div, "FOOTER")).toEqual(["7"]);
+  });
+
+  it("writes the number into a field result run that has no text", async () => {
+    const empty = r(fld("begin")) + r(instr("PAGE")) + r(fld("separate")) + "<w:r><w:rPr><w:b/></w:rPr></w:r>" + r(fld("end"));
+    div = await render({ body: para("A"), sectPr: FOOTER + PAGE, parts: [part("rIdF", [`<w:p>${empty}</w:p>`])] });
+
+    expect(docx.paginate(div)).toBe(true);
+    expect(shownText(div, "FOOTER")).toEqual(["1"]);
+  });
+
   it("numbers pages from pgNumType starts", async () => {
     const section = (pgNumType) => FOOTER + pgNumType + PAGE;
     div = await render({
