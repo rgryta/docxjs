@@ -184,6 +184,7 @@ ${body}
     const heads = paragraph("case-vml-arrow").querySelectorAll("svg path");
     expect(heads.length).toBe(1);
     expect(heads[0].getAttribute("fill")).toBe("black");
+    expectNear(rect(paragraph("case-vml-arrow").querySelector("svg line")).right, rect(heads[0]).left);
   });
 
   it("skips group children the author hid", () => {
