@@ -108,7 +108,8 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 		const bodyLimit = limitY - (end(last) - flow[over - 1].block.getBoundingClientRect().bottom);
 		const bodyOver = flow.findIndex(f => f.article && !isBlank(f.block) && f.block.getBoundingClientRect().bottom > bodyLimit);
 
-		if (bodyOver > 0 && bodyLimit - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT) {
+		if (bodyOver > 0 && bodyLimit - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT
+			&& refs.filter(r => flow.slice(0, bodyOver).some(f => f.block.contains(r))).length >= keptNotes) {
 			over = bodyOver;
 			splitLimit = bodyLimit;
 			keepNotes = true;
