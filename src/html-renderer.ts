@@ -65,7 +65,9 @@ const horizontalFrames: Record<string, [string, string]> = {
 	margin: textColumn,
 	column: textColumn,
 	leftMargin: ["0pt", marginLeft],
+	insideMargin: ["0pt", marginLeft],
 	rightMargin: [`(${pageWidth} - ${marginRight})`, marginRight],
+	outsideMargin: [`(${pageWidth} - ${marginRight})`, marginRight],
 };
 
 const verticalFrames: Record<string, [string, string]> = {
