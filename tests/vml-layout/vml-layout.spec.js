@@ -19,6 +19,8 @@ describe("VML shapes", function () {
     para("case-first"),
     para("case-h-page", pict(`<v:rect style="${PAGE}margin-left:72pt;width:20pt;height:10pt;mso-position-vertical-relative:text"/>`)),
     para("case-h-margin", pict(`<v:rect style="position:absolute;margin-left:24pt;width:20pt;height:10pt;mso-position-horizontal-relative:margin;mso-position-vertical-relative:text"/>`)),
+    para("case-h-centre", pict(`<v:rect style="position:absolute;mso-position-horizontal:center;mso-position-horizontal-relative:page;width:20pt;height:10pt;mso-position-vertical-relative:text"/>`)),
+    para("case-h-right", pict(`<v:rect style="position:absolute;mso-position-horizontal:right;mso-position-horizontal-relative:margin;width:20pt;height:10pt;mso-position-vertical-relative:text"/>`)),
     para("case-v-text", pict(`<v:rect style="${PAGE}margin-top:12pt;width:20pt;height:5pt;mso-position-vertical-relative:text"/>`)),
     para("case-bar", pict(`<v:shape coordsize="300,7" path="m300,l,,,7r300,l300,xe" fillcolor="black" stroked="f" style="${PAGE}margin-top:2pt;width:225pt;height:.6pt;mso-position-vertical-relative:text"/>`)),
     para("case-line", pict(`<v:line from="0,0" to="100pt,0" strokeweight="2pt" style="${PAGE}mso-position-vertical-relative:text"/>`)),
@@ -106,6 +108,12 @@ ${body}
 
   it("places a margin-relative shape from the margin, not from the text before it", () => {
     expectNear(rect(shapeBox("case-h-margin")).left - rect(section()).left, 96 + 32);
+  });
+
+  it("centres a shape on the page and right-aligns another to the margin", () => {
+    const page = rect(section());
+    expectNear(rect(shapeBox("case-h-centre")).left + rect(shapeBox("case-h-centre")).width / 2 - page.left, page.width / 2);
+    expectNear(rect(shapeBox("case-h-right")).right - page.left, page.width - 96);
   });
 
   it("places a text-relative shape below the top of its line", () => {
