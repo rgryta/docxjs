@@ -40,6 +40,8 @@ declare const Highlight: any;
 
 type CellVerticalMergeType = Record<number, HTMLTableCellElement>;
 
+const pageVariableNames = ["--docx-page-width", "--docx-page-height", "--docx-margin-left", "--docx-margin-right", "--docx-margin-top", "--docx-margin-bottom"] as const;
+
 export class HtmlRenderer {
 
 	className: string = "docx";
@@ -303,7 +305,7 @@ export class HtmlRenderer {
 					style.minHeight = props.pageSize.height;
 			}
 
-			const pageVariables = {
+			const pageVariables: Record<(typeof pageVariableNames)[number], string> = {
 				"--docx-page-width": props.pageSize?.width,
 				"--docx-page-height": props.pageSize?.height,
 				"--docx-margin-left": props.pageMargins?.left,
@@ -371,6 +373,10 @@ export class HtmlRenderer {
 
 			this.options.renderFooters && this.renderHeaderFooter(props.footerRefs, props,
 				result.length, prevProps != props, pageElement);
+
+			// only placed shapes read the page variables, so pages without one stay as before
+			if (!pageElement.querySelector('[style*="var(--docx-"]'))
+				pageVariableNames.forEach(name => pageElement.style.removeProperty(name));
 
 			result.push(pageElement);
 			prevProps = props;
