@@ -21,6 +21,7 @@ describe("VML shapes", function () {
     para("case-h-margin", pict(`<v:rect style="position:absolute;margin-left:24pt;width:20pt;height:10pt;mso-position-horizontal-relative:margin;mso-position-vertical-relative:text"/>`)),
     para("case-h-centre", pict(`<v:rect style="position:absolute;mso-position-horizontal:center;mso-position-horizontal-relative:page;width:20pt;height:10pt;mso-position-vertical-relative:text"/>`)),
     para("case-h-right", pict(`<v:rect style="position:absolute;mso-position-horizontal:right;mso-position-horizontal-relative:margin;width:20pt;height:10pt;mso-position-vertical-relative:text"/>`)),
+    para("case-h-default", pict('<v:rect style="position:absolute;margin-left:100pt;mso-position-horizontal:center;width:50pt;height:10pt"/>')),
     para("case-v-centre", pict(`<v:rect style="position:absolute;mso-position-horizontal:center;mso-position-horizontal-relative:page;mso-position-vertical:center;mso-position-vertical-relative:page;width:20pt;height:10pt"/>`)),
     para("case-aligned-offset", pict(`<v:rect style="position:absolute;mso-position-horizontal:center;mso-position-horizontal-relative:page;margin-top:30pt;mso-position-vertical-relative:page;width:20pt;height:10pt"/>`)),
     para("case-margin-area", pict(`<v:rect style="position:absolute;mso-position-horizontal:left;mso-position-horizontal-relative:margin;mso-position-vertical:bottom;mso-position-vertical-relative:top-margin-area;width:20pt;height:10pt"/>`)),
@@ -120,6 +121,11 @@ ${body}
     const page = rect(section());
     expectNear(rect(shapeBox("case-h-centre")).left + rect(shapeBox("case-h-centre")).width / 2 - page.left, page.width / 2);
     expectNear(rect(shapeBox("case-h-right")).right - page.left, page.width - 96);
+  });
+
+  it("aligns a shape with no horizontal relative to the text column", () => {
+    const box = rect(shapeBox("case-h-default"));
+    expectNear(box.left + box.width / 2 - rect(section()).left, rect(section()).width / 2);
   });
 
   it("takes the fill colour and opacity from v:fill", () => {
