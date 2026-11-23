@@ -70,14 +70,22 @@ export function integerPair(text: string, fallback: number[]): number[] {
 	});
 }
 
+/** Where an arrowhead's base sits on the line, in px: the line stops there so its end does not poke past the tip. */
+export function arrowBase(tip: number[], from: number[], strokeWidth: number, lengthScale: number): number[] {
+	const [tx, ty] = tip.map(v => v * pxPerPt);
+	const [fx, fy] = from.map(v => v * pxPerPt);
+	const distance = Math.hypot(tx - fx, ty - fy) || 1;
+	const length = lengthScale * strokeWidth * pxPerPt;
+	return [tx - (tx - fx) / distance * length, ty - (ty - fy) / distance * length];
+}
+
 export function arrowHead(tip: number[], from: number[], strokeWidth: number, widthScale: number, lengthScale: number): string {
 	const [tx, ty] = tip.map(v => v * pxPerPt);
 	const [fx, fy] = from.map(v => v * pxPerPt);
 	const distance = Math.hypot(tx - fx, ty - fy) || 1;
 	const [ux, uy] = [(tx - fx) / distance, (ty - fy) / distance];
-	const length = lengthScale * strokeWidth * pxPerPt;
 	const half = widthScale * strokeWidth * pxPerPt / 2;
-	const [bx, by] = [tx - ux * length, ty - uy * length];
+	const [bx, by] = arrowBase(tip, from, strokeWidth, lengthScale);
 	const f = (v: number) => `${parseFloat(v.toFixed(2))}`;
 
 	return `M ${f(tx)} ${f(ty)} L ${f(bx - uy * half)} ${f(by + ux * half)} L ${f(bx + uy * half)} ${f(by - ux * half)} Z`;

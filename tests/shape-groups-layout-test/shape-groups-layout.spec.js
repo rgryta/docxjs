@@ -165,6 +165,7 @@ ${body}
     expect(head.getAttribute("fill")).toBe("#ff0000");
     expectNear(bounds.width, 8);
     expectNear(rect(head).right, rect(box).right);
+    expectNear(rect(line).right, rect(head).left);
     expect(reasons(paragraph("case-arrow"))).toEqual([]);
   });
 
