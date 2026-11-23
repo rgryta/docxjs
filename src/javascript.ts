@@ -46,13 +46,13 @@ export function updateTabStop(elem: HTMLElement, tabs: ParagraphTab[], defaultTa
 	measureTabSpans([elem]);
 }
 
-/** Measures the tab stops again, for example after a font or zoom change. Only works on spans this renderer created: a cloned container is not registered and is left unchanged. */
+/** Measures the tab stops again, for example after fonts load or the zoom changes. Tabs in a cloned container are not registered and stay as they are. */
 export function remeasureTabStops(root: ParentNode, className: string = "docx"): void {
 	measureTabSpans(Array.from(root.querySelectorAll<HTMLElement>(`.${className}-tab-stop`)));
 }
 
 export function measureTabSpans(spans: HTMLElement[]): void {
-	// shortcut: stops are measured from the left edge, so right-to-left paragraphs keep the placeholder tab; handle them when RTL is needed
+	// stops are measured from the left edge, so right-to-left paragraphs keep the placeholder tab
 	const groups = groupByParagraph(spans.filter(s => registered.has(s) && s.isConnected && s.closest("p")?.getBoundingClientRect().width > 0 && getComputedStyle(s.closest("p")).direction != "rtl"));
 
 	if (groups.length == 0)

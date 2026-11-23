@@ -7,7 +7,6 @@ describe("tab stops", function () {
 
         await docx.renderAsync(docBlob, div, null, { experimental: true });
 
-        // measure now instead of waiting for the render timer
         docx.remeasureTabStops(div);
 
         // the paragraph carries ind left=1440 hanging=720 and a left tab stop at 1440,
