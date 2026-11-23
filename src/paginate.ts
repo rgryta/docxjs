@@ -69,7 +69,21 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 		...children.filter(c => c.tagName === "OL").map(block => ({ block, article: null as HTMLElement })),
 	];
 	// Empty paragraphs (such as the one holding a page break) never start a page.
-	const over = flow.findIndex(f => !isBlank(f.block) && f.block.getBoundingClientRect().bottom > limitY);
+	let over = flow.findIndex(f => !isBlank(f.block) && f.block.getBoundingClientRect().bottom > limitY);
+	let splitLimit = limitY;
+	let keepNotes = false;
+
+	// Notes that do not fit push the last body lines down, as in Word, instead of taking a page of their own.
+	if (over > 0 && !flow[over].article && flow[over - 1].article) {
+		const bodyLimit = limitY - (flow[flow.length - 1].block.getBoundingClientRect().bottom - flow[over - 1].block.getBoundingClientRect().bottom);
+		const bodyOver = flow.findIndex(f => f.article && !isBlank(f.block) && f.block.getBoundingClientRect().bottom > bodyLimit);
+
+		if (bodyOver > 0 && bodyLimit - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT) {
+			over = bodyOver;
+			splitLimit = bodyLimit;
+			keepNotes = true;
+		}
+	}
 
 	if (over < 0) {
 		for (const f of flow) {
@@ -85,9 +99,9 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	let carry: HTMLElement = null;
 
 	if (flow[over].block.tagName === "TABLE")
-		carry = splitTable(flow[over].block as HTMLTableElement, limitY);
+		carry = splitTable(flow[over].block as HTMLTableElement, splitLimit);
 	else if (flow[over].block.tagName === "P")
-		carry = splitParagraph(flow[over].block, limitY, className);
+		carry = splitParagraph(flow[over].block, splitLimit, className);
 
 	if (carry) {
 		cut = over + 1;
@@ -111,7 +125,7 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	for (const f of flow.slice(cut)) {
 		if (f.article)
 			moved.set(f.article, [...(moved.get(f.article) ?? []), f.block]);
-		else
+		else if (!keepNotes)
 			notes.push(f.block);
 	}
 

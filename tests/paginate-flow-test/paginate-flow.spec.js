@@ -174,6 +174,22 @@
       pages(div).forEach(page => expect(fits(page)).toBe(true));
     });
 
+    it("pushes body lines down instead of giving the notes a page of their own", async () => {
+      for (let count = 36; count <= 56; count++) {
+        div?.remove();
+        div = await render({
+          body: `<w:p>${run("Ref")}<w:r><w:footnoteReference w:id="1"/></w:r></w:p>` + paras(count, 1),
+          parts: [{ id: "rIdN", type: "footnotes", target: "footnotes.xml", content: `<w:footnotes ${NS}><w:footnote w:id="1">${para("Note")}${para("Second note line")}</w:footnote></w:footnotes>` }],
+        });
+
+        docx.paginate(div);
+
+        const notesPage = pages(div).find(p => p.querySelector(":scope > ol"));
+        expect(notesPage.querySelector(":scope > article > p")).withContext(`${count} paragraphs`).not.toBeNull();
+        pages(div).forEach(page => expect(fits(page)).withContext(`${count} paragraphs`).toBe(true));
+      }
+    });
+
     it("splits the pages before a notes list taller than a page", async () => {
       div = await render({
         body: `<w:p>${run(lorem(2))}<w:r><w:footnoteReference w:id="1"/></w:r></w:p>` + paras(24),
