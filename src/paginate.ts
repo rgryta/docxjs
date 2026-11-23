@@ -37,7 +37,6 @@ export function paginate(root: HTMLElement, className: string = "docx", options?
 	return done;
 }
 
-/** Splits the pages in order, adding the new pages to the list. Returns false when it stopped at the deadline. */
 function splitPages(pages: HTMLElement[], className: string, deadline: number): boolean {
 	let number = 0;
 
