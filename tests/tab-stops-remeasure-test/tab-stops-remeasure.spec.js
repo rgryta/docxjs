@@ -141,6 +141,18 @@ ${body.join("\n")}
     expectAt(run(container, "Indented").getBoundingClientRect().right, container, 468, "right");
   });
 
+  it("uses the left indent of a hanging indent as the first stop", async () => {
+    const hanging = '<w:ind w:left="1080" w:hanging="360"/>';
+    const container = await render([
+      paragraph(hanging, "a", "\t", "Bullet"),
+      paragraph(hanging + tabs(["left", 900]), "b", "\t", "Declared"),
+    ]);
+    docx.remeasureTabStops(container);
+
+    expectAt(run(container, "Bullet").getBoundingClientRect().left, container, 54, "indent");
+    expectAt(run(container, "Declared").getBoundingClientRect().left, container, 45, "declared before indent");
+  });
+
   it("gives the same widths on every call and follows a changed layout", async () => {
     const container = await render([
       paragraph(tabs(["left", 2880], ["right", 9360]), "a", "\t", "One", "\t", "Last"),

@@ -116,11 +116,14 @@ function groupByParagraph(spans: HTMLElement[]): TabGroup[] {
 		if (!group) {
 			const { stops, defaultTabSize } = registered.get(span);
 			const all = (stops ?? []).map(t => ({ pos: lengthToPoint(t.position), leader: t.leader, style: t.style }));
+			const pcs = getComputedStyle(p);
+			// Word uses the left indent of a hanging indent as a tab stop
+			const indent = parseFloat(pcs.textIndent) < 0 ? [{ pos: parseFloat(pcs.marginLeft) * 0.75, leader: "none", style: "left" }] : [];
 			group = {
 				p,
 				spans: [],
 				// a bar tab draws a line and is never a tab target
-				stops: all.filter(t => t.style != "clear" && t.style != "bar").sort((a, b) => a.pos - b.pos),
+				stops: [...all.filter(t => t.style != "clear" && t.style != "bar"), ...indent].sort((a, b) => a.pos - b.pos),
 				clears: all.filter(t => t.style == "clear").map(t => t.pos),
 				defaultTabSize: lengthToPoint(defaultTabSize) || 36,
 			};
