@@ -4,6 +4,7 @@
 .docx { color: black; hyphens: manual; text-underline-position: from-font; }
 section.docx { box-sizing: border-box; display: flex; flex-flow: column nowrap; position: relative; overflow: hidden; }
 section.docx>article { margin-bottom: auto; z-index: 1; }
+section.docx>header { z-index: 1; }
 section.docx>footer { z-index: 1; }
 .docx table { border-collapse: collapse; }
 .docx table td, .docx table th { vertical-align: top; }
@@ -42,9 +43,9 @@ section.docx>footer { z-index: 1; }
   --docx-run-line-height: initial;
   line-height: 1.08;
 }
-.docx p span, p.docx_normal span {
+:where(.docx) p span, p.docx_normal span {
 }
-.docx table td, table.docx_tablenormal td {
+:where(.docx) table td, table.docx_tablenormal td {
   padding-top: 0.00pt;
   padding-left: 5.40pt;
   padding-bottom: 0.00pt;

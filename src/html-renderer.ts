@@ -440,8 +440,8 @@ export class HtmlRenderer {
 		if (ref?.type == "first")
 			into.setAttribute("data-docx-first-page", "");
 
-		// The alternates are rendered hidden so paginate can show the one each split page needs.
-		for (const alt of refs.filter(x => x == ref || x.type == "default" || (x.type == "even" && evenAndOddHeaders))) {
+		// with paginate on, the alternates are rendered hidden for the pages it splits off
+		for (const alt of refs.filter(x => x == ref || this.options.paginate && (x.type == "default" || (x.type == "even" && evenAndOddHeaders)))) {
 			var part = this.document.findPartByRelId(alt.id, this.document.documentPart) as BaseHeaderFooterPart;
 
 			if (!part)
@@ -655,6 +655,7 @@ export class HtmlRenderer {
 .${c} { color: black; hyphens: ${this.document.settingsPart?.settings?.autoHyphenation ? "auto" : "manual"}; text-underline-position: from-font; }
 section.${c} { box-sizing: border-box; display: flex; flex-flow: column nowrap; position: relative; overflow: hidden; }
 section.${c}>article { margin-bottom: auto; z-index: 1; }
+section.${c}>header { z-index: 1; }
 section.${c}>footer { z-index: 1; }
 .${c} table { border-collapse: collapse; }
 .${c} table td, .${c} table th { vertical-align: top; }
@@ -839,7 +840,7 @@ section.${c}>footer { z-index: 1; }
 				var selector = `${style.target ?? ''}.${style.cssName}${subTarget}`; //${subStyle.mod ?? ''} 
 
 				if (defautStyles[style.target] == style)
-					selector = `.${this.className} ${style.target}${subTarget}, ` + selector;
+					selector = `${subTarget ? `:where(.${this.className})` : `.${this.className}`} ${style.target}${subTarget}, ` + selector;
 
 				if (subStyle.target == "span" && (style.target == null || style.target == "p")) {
 					const font = Object.fromEntries(Object.entries(subStyle.values).filter(([key]) =>
@@ -1480,7 +1481,7 @@ section.${c}>footer { z-index: 1; }
 		}
 
 		if (elem.children[0].type == DomType.Image) {
-			this.placeShapeWrapper(elem.anchor, false, wrapper.style, elem.anchor.width, elem.anchor.height);
+			this.placeShapeWrapper(elem.anchor, false, wrapper.style, elem.anchor.width ?? 0, elem.anchor.height ?? 0);
 			wrapper.appendChild(this.renderImage(elem.children[0] as IDomImage));
 			return wrapper;
 		}
@@ -1505,6 +1506,9 @@ section.${c}>footer { z-index: 1; }
 
 		if (group.place)
 			this.placeInGroup(group.place, box.style);
+
+		if (group.rotation)
+			box.style.setProperty("transform", `rotate(${formatNumber(group.rotation)}deg)`);
 
 		this.renderElements(group.children, box);
 		return box;
@@ -1682,6 +1686,13 @@ section.${c}>footer { z-index: 1; }
 				set("bottom", `calc(var(--docx-page-height, 100%) - ${top} - ${pt(box.height ?? 0)})`);
 			else
 				set("top", box.vRelative == "page" ? top : `calc(${top})`);
+		} else if (box.position == "absolute" && box.width != null && (box.hAlign == "center" || box.hAlign == "right") && (box.hRelative == "page" || box.hRelative == "margin")) {
+			const from = box.hRelative == "page" ? "0pt" : "var(--docx-margin-left, 0pt)";
+			const span = box.hRelative == "page" ? "var(--docx-page-width, 0pt)"
+				: "(var(--docx-page-width, 0pt) - var(--docx-margin-left, 0pt) - var(--docx-margin-right, 0pt))";
+
+			set("position", "absolute");
+			set("left", `calc(${from} + ${span}${box.hAlign == "center" ? ` / 2 - ${pt(box.width / 2)}` : ` - ${pt(box.width)}`})`);
 		} else {
 			if (box.position == "absolute") set("position", "absolute");
 			if (box.x) set("margin-left", pt(box.x));

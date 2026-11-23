@@ -20,6 +20,7 @@ export interface VmlSvgPart {
 export interface VmlBox {
 	position?: string;
 	placed: boolean;
+	hAlign?: string;
 	hRelative?: string;
 	vRelative?: string;
 	x: number;
@@ -100,8 +101,10 @@ export function parseVmlElement(elem: Element, parser: DocumentParser, watermark
 	if (typeRef) {
 		shapeType = typeRef.startsWith("#") ? parser.vmlShapeTypes.get(typeRef.substring(1)) : undefined;
 
-		if (!shapeType)
+		if (!shapeType && !xml.elements(elem).some(el => el.localName == "imagedata"))
 			return notDrawn("vml-type");
+
+		shapeType ??= {};
 	}
 
 	const result = new VmlElement();
@@ -381,6 +384,7 @@ function parseBox(style: Map<string, string>): VmlBox {
 	return {
 		position,
 		placed: position == "absolute" && (!hAlign || hAlign == "absolute"),
+		hAlign,
 		hRelative: style.get("mso-position-horizontal-relative"),
 		vRelative: style.get("mso-position-vertical-relative"),
 		x: lengthPoints(style.get("margin-left")) ?? lengthPoints(style.get("left")) ?? 0,

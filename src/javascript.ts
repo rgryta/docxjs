@@ -59,12 +59,14 @@ export function cloneWithTabStops<T extends HTMLElement>(source: T): T {
 	return copy;
 }
 
+/** Measures the tab stops again, for example after fonts load or the zoom changes. Tabs in a cloned container are not registered and stay as they are. */
 export function remeasureTabStops(root: ParentNode, className: string = "docx"): void {
 	measureTabSpans(Array.from(root.querySelectorAll<HTMLElement>(`.${className}-tab-stop`)));
 }
 
 export function measureTabSpans(spans: HTMLElement[]): void {
-	const groups = groupByParagraph(spans.filter(s => registered.has(s) && s.isConnected && s.closest("p")?.getBoundingClientRect().width > 0));
+	// stops are measured from the left edge, so right-to-left paragraphs keep the placeholder tab
+	const groups = groupByParagraph(spans.filter(s => registered.has(s) && s.isConnected && s.closest("p")?.getBoundingClientRect().width > 0 && getComputedStyle(s.closest("p")).direction != "rtl"));
 
 	if (groups.length == 0)
 		return;
@@ -136,13 +138,13 @@ function groupByParagraph(spans: HTMLElement[]): TabGroup[] {
 }
 
 function nextStop(g: TabGroup, x: number): TabStop {
-	const declared = g.stops.find(t => t.pos > x);
+	const declared = g.stops.find(t => t.pos > x + posTolerance);
 
 	if (declared)
 		return declared;
 
 	const size = g.defaultTabSize;
-	let pos = (Math.floor(x / size) + 1) * size;
+	let pos = (Math.floor((x + posTolerance) / size) + 1) * size;
 
 	while (g.clears.some(c => Math.abs(c - pos) < posTolerance))
 		pos += size;

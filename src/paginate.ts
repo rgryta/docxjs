@@ -8,7 +8,7 @@
 // loaded. renderAsync runs it with the `paginate` option; call it yourself
 // after renderDocument when you insert the nodes elsewhere.
 
-import { cloneWithTabStops } from "./javascript";
+import { cloneWithTabStops, remeasureTabStops } from "./javascript";
 
 const MAX_PAGES = 2000;
 const MIN_SPLIT_HEIGHT = 24;
@@ -36,10 +36,11 @@ export function paginate(root: HTMLElement, className: string = "docx", options?
 			fillPages(pages, done);
 	}
 
+	// pages shown or cloned by the split were hidden or absent when the tabs were first measured
+	remeasureTabStops(root, className);
 	return done;
 }
 
-/** Splits the pages in order, adding the new pages to the list. Returns false when it stopped at the deadline. */
 function splitPages(pages: HTMLElement[], className: string, deadline: number): boolean {
 	let number = 0;
 
@@ -66,20 +67,25 @@ function pageNumber(page: HTMLElement, previous: number): number {
 
 /**
  * Sets each page's PAGE fields to its number (unless its section numbers pages in another format)
- * and, with withCount, each NUMPAGES field to the page count. Returns true when any text changed.
+ * and, with withCount, each NUMPAGES field to the page count. Returns true when a text changed its
+ * length, because only then can the page layout change.
  */
 function fillPages(pages: HTMLElement[], withCount: boolean): boolean {
 	let number = 0;
 	let changed = false;
+	const fill = (field: HTMLElement, text: string) => {
+		const before = field.textContent.length;
+		return setFieldText(field, text) && before != text.length;
+	};
 
 	for (const page of pages) {
 		number = pageNumber(page, number);
 
 		if (!page.hasAttribute("data-page-format"))
-			fields(page, "PAGE").forEach(f => changed = setFieldText(f, String(number)) || changed);
+			fields(page, "PAGE").forEach(f => changed = fill(f, String(number)) || changed);
 
 		if (withCount)
-			fields(page, "NUMPAGES").forEach(f => changed = setFieldText(f, String(pages.length)) || changed);
+			fields(page, "NUMPAGES").forEach(f => changed = fill(f, String(pages.length)) || changed);
 
 		showHeaderFooter(page, number);
 	}
@@ -224,7 +230,6 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	return next;
 }
 
-/** Shows the header and footer alternate the renderer's rule picks for the page's number. */
 function showHeaderFooter(page: HTMLElement, number: number) {
 	for (const tag of ["HEADER", "FOOTER"]) {
 		const alternates = (Array.from(page.children) as HTMLElement[]).filter(c => c.tagName === tag && c.dataset.docxHf);

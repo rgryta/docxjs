@@ -1370,8 +1370,9 @@ function parseVmlElement(elem, parser, watermarkAllowed = false, frame = null) {
     const typeRef = elem.localName == "shape" ? globalXmlParser.attr(elem, "type") : null;
     if (typeRef) {
         shapeType = typeRef.startsWith("#") ? parser.vmlShapeTypes.get(typeRef.substring(1)) : undefined;
-        if (!shapeType)
+        if (!shapeType && !globalXmlParser.elements(elem).some(el => el.localName == "imagedata"))
             return notDrawn("vml-type");
+        shapeType ?? (shapeType = {});
     }
     const result = new VmlElement();
     let stroke = null, fill = null, textBox = null, imageData = null;
@@ -1606,6 +1607,7 @@ function parseBox(style) {
     return {
         position,
         placed: position == "absolute" && (!hAlign || hAlign == "absolute"),
+        hAlign,
         hRelative: style.get("mso-position-horizontal-relative"),
         vRelative: style.get("mso-position-vertical-relative"),
         x: lengthPoints(style.get("margin-left")) ?? lengthPoints(style.get("left")) ?? 0,
@@ -2007,7 +2009,13 @@ function parseShapeDrawing(node, shape, nested) {
     };
 }
 function parseDrawingGroup(wgp, extent, parser) {
-    return parseGroup(wgp, parser, extent ? emuPoints(globalXmlParser.attr(extent, "cx")) : null, extent ? emuPoints(globalXmlParser.attr(extent, "cy")) : null, false, false);
+    const result = parseGroup(wgp, parser, extent ? emuPoints(globalXmlParser.attr(extent, "cx")) : null, extent ? emuPoints(globalXmlParser.attr(extent, "cy")) : null, false, false);
+    if (result instanceof DrawingGroup) {
+        const props = globalXmlParser.element(wgp, "grpSpPr");
+        const xfrm = props && globalXmlParser.element(props, "xfrm");
+        result.rotation = ((xfrm && integer(globalXmlParser.attr(xfrm, "rot"))) ?? 0) % 21600000 / 60000;
+    }
+    return result;
 }
 function xfrmPair(xfrm, name, a, b) {
     const el = xfrm && globalXmlParser.element(xfrm, name);
@@ -3377,7 +3385,9 @@ class DocumentParser {
         if (line) {
             style["--docx-run-line-height"] = lineRule == "atLeast" ? "normal" : "initial";
             if (lineRule == "auto") {
-                style["line-height"] = `${(parseInt(line) / 240).toFixed(2)}`;
+                const multiple = Number(line) / 240;
+                if (multiple >= 0.005)
+                    style["line-height"] = multiple.toFixed(2);
             }
             else {
                 const length = /(mm|cm|in|pc|pi|pt)$/.test(line) ? convertLength(line, LengthUsage.Dxa) : `${parseInt(line) / 20}pt`;
@@ -3674,7 +3684,7 @@ function remeasureTabStops(root, className = "docx") {
     measureTabSpans(Array.from(root.querySelectorAll(`.${className}-tab-stop`)));
 }
 function measureTabSpans(spans) {
-    const groups = groupByParagraph(spans.filter(s => registered.has(s) && s.isConnected && s.closest("p")?.getBoundingClientRect().width > 0));
+    const groups = groupByParagraph(spans.filter(s => registered.has(s) && s.isConnected && s.closest("p")?.getBoundingClientRect().width > 0 && getComputedStyle(s.closest("p")).direction != "rtl"));
     if (groups.length == 0)
         return;
     groups.forEach(g => g.spans.forEach(reset));
@@ -3731,11 +3741,11 @@ function groupByParagraph(spans) {
     return [...groups.values()];
 }
 function nextStop(g, x) {
-    const declared = g.stops.find(t => t.pos > x);
+    const declared = g.stops.find(t => t.pos > x + posTolerance);
     if (declared)
         return declared;
     const size = g.defaultTabSize;
-    let pos = (Math.floor(x / size) + 1) * size;
+    let pos = (Math.floor((x + posTolerance) / size) + 1) * size;
     while (g.clears.some(c => Math.abs(c - pos) < posTolerance))
         pos += size;
     return { pos, leader: "none", style: "left" };
@@ -4146,7 +4156,7 @@ class HtmlRenderer {
             ?? refs.find(x => x.type == "default");
         if (ref?.type == "first")
             into.setAttribute("data-docx-first-page", "");
-        for (const alt of refs.filter(x => x == ref || x.type == "default" || (x.type == "even" && evenAndOddHeaders))) {
+        for (const alt of refs.filter(x => x == ref || this.options.paginate && (x.type == "default" || (x.type == "even" && evenAndOddHeaders)))) {
             var part = this.document.findPartByRelId(alt.id, this.document.documentPart);
             if (!part)
                 continue;
@@ -4319,6 +4329,7 @@ class HtmlRenderer {
 .${c} { color: black; hyphens: ${this.document.settingsPart?.settings?.autoHyphenation ? "auto" : "manual"}; text-underline-position: from-font; }
 section.${c} { box-sizing: border-box; display: flex; flex-flow: column nowrap; position: relative; overflow: hidden; }
 section.${c}>article { margin-bottom: auto; z-index: 1; }
+section.${c}>header { z-index: 1; }
 section.${c}>footer { z-index: 1; }
 .${c} table { border-collapse: collapse; }
 .${c} table td, .${c} table th { vertical-align: top; }
@@ -4419,7 +4430,7 @@ section.${c}>footer { z-index: 1; }
                 const subTarget = style.target != subStyle.target ? ` ${subStyle.target}` : '';
                 var selector = `${style.target ?? ''}.${style.cssName}${subTarget}`;
                 if (defautStyles[style.target] == style)
-                    selector = `.${this.className} ${style.target}${subTarget}, ` + selector;
+                    selector = `${subTarget ? `:where(.${this.className})` : `.${this.className}`} ${style.target}${subTarget}, ` + selector;
                 if (subStyle.target == "span" && (style.target == null || style.target == "p")) {
                     const font = Object.fromEntries(Object.entries(subStyle.values).filter(([key]) => ["font-family", "font-size", "font-weight", "font-style"].includes(key)));
                     const parentSelector = selector.split(", ").map(s => s.replace(/ span$/, "")).join(", ");
@@ -4887,7 +4898,7 @@ section.${c}>footer { z-index: 1; }
             return wrapper;
         }
         if (elem.children[0].type == DomType.Image) {
-            this.placeShapeWrapper(elem.anchor, false, wrapper.style, elem.anchor.width, elem.anchor.height);
+            this.placeShapeWrapper(elem.anchor, false, wrapper.style, elem.anchor.width ?? 0, elem.anchor.height ?? 0);
             wrapper.appendChild(this.renderImage(elem.children[0]));
             return wrapper;
         }
@@ -4906,6 +4917,8 @@ section.${c}>footer { z-index: 1; }
             box.style.setProperty(key, value);
         if (group.place)
             this.placeInGroup(group.place, box.style);
+        if (group.rotation)
+            box.style.setProperty("transform", `rotate(${formatNumber(group.rotation)}deg)`);
         this.renderElements(group.children, box);
         return box;
     }
@@ -5065,6 +5078,13 @@ section.${c}>footer { z-index: 1; }
                 set("bottom", `calc(var(--docx-page-height, 100%) - ${top} - ${pt(box.height ?? 0)})`);
             else
                 set("top", box.vRelative == "page" ? top : `calc(${top})`);
+        }
+        else if (box.position == "absolute" && box.width != null && (box.hAlign == "center" || box.hAlign == "right") && (box.hRelative == "page" || box.hRelative == "margin")) {
+            const from = box.hRelative == "page" ? "0pt" : "var(--docx-margin-left, 0pt)";
+            const span = box.hRelative == "page" ? "var(--docx-page-width, 0pt)"
+                : "(var(--docx-page-width, 0pt) - var(--docx-margin-left, 0pt) - var(--docx-margin-right, 0pt))";
+            set("position", "absolute");
+            set("left", `calc(${from} + ${span}${box.hAlign == "center" ? ` / 2 - ${pt(box.width / 2)}` : ` - ${pt(box.width)}`})`);
         }
         else {
             if (box.position == "absolute")
@@ -5302,6 +5322,7 @@ function paginate(root, className = "docx", options) {
         if (pages.length != count)
             fillPages(pages, done);
     }
+    remeasureTabStops(root, className);
     return done;
 }
 function splitPages(pages, className, deadline) {
@@ -5324,12 +5345,16 @@ function pageNumber(page, previous) {
 function fillPages(pages, withCount) {
     let number = 0;
     let changed = false;
+    const fill = (field, text) => {
+        const before = field.textContent.length;
+        return setFieldText(field, text) && before != text.length;
+    };
     for (const page of pages) {
         number = pageNumber(page, number);
         if (!page.hasAttribute("data-page-format"))
-            fields(page, "PAGE").forEach(f => changed = setFieldText(f, String(number)) || changed);
+            fields(page, "PAGE").forEach(f => changed = fill(f, String(number)) || changed);
         if (withCount)
-            fields(page, "NUMPAGES").forEach(f => changed = setFieldText(f, String(pages.length)) || changed);
+            fields(page, "NUMPAGES").forEach(f => changed = fill(f, String(pages.length)) || changed);
         showHeaderFooter(page, number);
     }
     return changed;

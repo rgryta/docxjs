@@ -19,6 +19,8 @@ describe("VML shapes", function () {
     para("case-first"),
     para("case-h-page", pict(`<v:rect style="${PAGE}margin-left:72pt;width:20pt;height:10pt;mso-position-vertical-relative:text"/>`)),
     para("case-h-margin", pict(`<v:rect style="position:absolute;margin-left:24pt;width:20pt;height:10pt;mso-position-horizontal-relative:margin;mso-position-vertical-relative:text"/>`)),
+    para("case-h-centre", pict(`<v:rect style="position:absolute;mso-position-horizontal:center;mso-position-horizontal-relative:page;width:20pt;height:10pt;mso-position-vertical-relative:text"/>`)),
+    para("case-h-right", pict(`<v:rect style="position:absolute;mso-position-horizontal:right;mso-position-horizontal-relative:margin;width:20pt;height:10pt;mso-position-vertical-relative:text"/>`)),
     para("case-v-text", pict(`<v:rect style="${PAGE}margin-top:12pt;width:20pt;height:5pt;mso-position-vertical-relative:text"/>`)),
     para("case-bar", pict(`<v:shape coordsize="300,7" path="m300,l,,,7r300,l300,xe" fillcolor="black" stroked="f" style="${PAGE}margin-top:2pt;width:225pt;height:.6pt;mso-position-vertical-relative:text"/>`)),
     para("case-line", pict(`<v:line from="0,0" to="100pt,0" strokeweight="2pt" style="${PAGE}mso-position-vertical-relative:text"/>`)),
@@ -34,6 +36,7 @@ describe("VML shapes", function () {
       pict('<v:polyline points="0,0 10,10"/>'),
       pict('<v:shape style="width:10pt;height:10pt"/>'),
       pict('<v:shape type="#missing" style="width:10pt;height:10pt"/>')),
+    para("case-picture-no-type", pict('<v:shape type="#missing" style="width:10pt;height:10pt"><v:imagedata r:id="rIdMissing"/></v:shape>')),
     para("case-watermark-alternate",
       `<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing/></mc:Choice><mc:Fallback>${`<w:pict>${textPath}</w:pict>`}</mc:Fallback></mc:AlternateContent></w:r>`),
     para("case-watermark-bare", pict(textPath)),
@@ -42,6 +45,8 @@ describe("VML shapes", function () {
 
   const footer = `<w:ftr ${NS}><w:p>${pict(`<v:rect style="${PAGE}margin-top:176pt;width:50pt;height:12pt;mso-position-vertical-relative:page"/>`)}</w:p></w:ftr>`;
 
+  const header = `<w:hdr ${NS}><w:p>${pict(`<v:rect style="${PAGE}width:50pt;height:12pt;z-index:-1;mso-position-vertical-relative:page"/>`)}</w:p></w:hdr>`;
+
   async function buildDocx() {
     const zip = new JSZip();
     zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -49,6 +54,7 @@ describe("VML shapes", function () {
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
 <Default Extension="xml" ContentType="application/xml"/>
 <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
 <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
 </Types>`);
     zip.file("_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -57,13 +63,17 @@ describe("VML shapes", function () {
 </Relationships>`);
     zip.file("word/_rels/document.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rIdHeader" Type="${REL}/header" Target="header1.xml"/>
 <Relationship Id="rIdFooter" Type="${REL}/footer" Target="footer1.xml"/>
 </Relationships>`);
+    zip.file("word/header1.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+${header}`);
     zip.file("word/footer1.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${footer}`);
     zip.file("word/document.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document ${NS}><w:body>
 ${body}
 <w:sectPr>
+<w:headerReference w:type="default" r:id="rIdHeader"/>
 <w:footerReference w:type="default" r:id="rIdFooter"/>
 <w:pgSz w:w="12240" w:h="4000"/>
 <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>
@@ -98,6 +108,12 @@ ${body}
 
   it("places a margin-relative shape from the margin, not from the text before it", () => {
     expectNear(rect(shapeBox("case-h-margin")).left - rect(section()).left, 96 + 32);
+  });
+
+  it("centres a shape on the page and right-aligns another to the margin", () => {
+    const page = rect(section());
+    expectNear(rect(shapeBox("case-h-centre")).left + rect(shapeBox("case-h-centre")).width / 2 - page.left, page.width / 2);
+    expectNear(rect(shapeBox("case-h-right")).right - page.left, page.width - 96);
   });
 
   it("places a text-relative shape below the top of its line", () => {
@@ -168,5 +184,14 @@ ${body}
     const reason = id => paragraph(id).querySelector("[data-docx-not-drawn]")?.getAttribute("data-docx-not-drawn");
     expect(reason("case-watermark-alternate")).toBe("vml-element");
     expect(reason("case-watermark-bare")).toBe("watermark");
+  });
+
+  it("keeps a shape behind the text visible in the header", () => {
+    expect(getComputedStyle(section().querySelector("header")).zIndex).toBe("1");
+  });
+
+  it("does not mark a picture shape whose shape type is missing", () => {
+    const reasons = Array.from(paragraph("case-picture-no-type").querySelectorAll("[data-docx-not-drawn]")).map(e => e.getAttribute("data-docx-not-drawn"));
+    expect(reasons).not.toContain("vml-type");
   });
 });
