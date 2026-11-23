@@ -47,6 +47,19 @@ export function updateTabStop(elem: HTMLElement, tabs: ParagraphTab[], defaultTa
 	measureTabSpans([elem]);
 }
 
+export function cloneWithTabStops<T extends HTMLElement>(source: T): T {
+	const copy = source.cloneNode(true) as T;
+	const originals = source.querySelectorAll<HTMLElement>("span");
+	const copies = copy.querySelectorAll<HTMLElement>("span");
+
+	originals.forEach((span, i) => {
+		const registration = registered.get(span);
+		if (registration) registered.set(copies[i], registration);
+	});
+
+	return copy;
+}
+
 /** Measures the tab stops again, for example after fonts load or the zoom changes. Tabs in a cloned container are not registered and stay as they are. */
 export function remeasureTabStops(root: ParentNode, className: string = "docx"): void {
 	measureTabSpans(Array.from(root.querySelectorAll<HTMLElement>(`.${className}-tab-stop`)));
