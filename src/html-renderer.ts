@@ -378,7 +378,7 @@ export class HtmlRenderer {
 		if (ref?.type == "first")
 			into.setAttribute("data-docx-first-page", "");
 
-		// With pagination on, the alternates are rendered hidden so paginate can show the one each split page needs.
+		// with paginate on, the alternates are rendered hidden for the pages it splits off
 		for (const alt of refs.filter(x => x == ref || this.options.paginate && (x.type == "default" || (x.type == "even" && evenAndOddHeaders)))) {
 			var part = this.document.findPartByRelId(alt.id, this.document.documentPart) as BaseHeaderFooterPart;
 

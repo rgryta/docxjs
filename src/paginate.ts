@@ -144,7 +144,6 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	return next;
 }
 
-/** Shows the header and footer alternate the renderer's rule picks for the page's position. */
 function showHeaderFooter(page: HTMLElement, index: number) {
 	for (const tag of ["HEADER", "FOOTER"]) {
 		const alternates = (Array.from(page.children) as HTMLElement[]).filter(c => c.tagName === tag && c.dataset.docxHf);
