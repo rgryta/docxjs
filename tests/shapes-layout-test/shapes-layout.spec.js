@@ -108,7 +108,7 @@ describe("DrawingML shapes", function () {
 <a:fmtScheme name="m"><a:lnStyleLst><a:ln w="6350"/><a:ln w="12700"/><a:ln w="19050"/></a:lnStyleLst></a:fmtScheme>
 </a:themeElements></a:theme>`;
 
-  async function buildDocx() {
+  async function buildDocx(content = body, columns = "") {
     const zip = new JSZip();
     zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -131,8 +131,8 @@ describe("DrawingML shapes", function () {
     zip.file("word/footer1.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${footer}`);
     zip.file("word/document.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document ${NS}><w:body>
-${body}
-<w:sectPr>
+${content}
+<w:sectPr>${columns}
 <w:footerReference w:type="default" r:id="rIdFooter"/>
 <w:pgSz w:w="6000" w:h="6000"/>
 <w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720" w:header="360" w:footer="360" w:gutter="0"/>
@@ -313,6 +313,33 @@ ${body}
     expect(reasons(paragraph("case-depth-16"))).toEqual([]);
     expect(Array.from(paragraph("case-depth-16").querySelectorAll("p")).some(p => p.textContent == "innermost")).toBeTrue();
     expect(reasons(paragraph("case-depth-17"))).toEqual(["depth"]);
+  });
+
+  describe("in a two-column section", () => {
+    const square = (id, h) => para(id, run(anchor({ h, v: posV("paragraph", offset(0)), w: 40, ht: 30, wrap: '<wp:wrapSquare wrapText="bothSides"/>' }, shapeGraphic(wsp({ w: 40, h: 30 })))));
+    let columns;
+
+    beforeAll(async () => {
+      columns = document.createElement("div");
+      document.body.prepend(columns);
+      const cell = `<w:tbl><w:tr><w:tc>${square("case-cell", posH("column", align("center")))}</w:tc></w:tr></w:tbl>`;
+      await docx.renderAsync(await buildDocx(square("case-columns", posH("column", align("center"))) + cell, '<w:cols w:num="2" w:space="240"/>'), columns);
+    });
+
+    afterAll(() => columns.remove());
+
+    const wrapperIn = id => Array.from(columns.querySelectorAll("article p")).find(p => p.textContent.startsWith(`${id} `)).querySelector("div");
+
+    it("centres a column-relative shape in its own column", () => {
+      const wrapper = wrapperIn("case-columns");
+      const box = rect(wrapper);
+      expect(getComputedStyle(wrapper).cssFloat).toBe("left");
+      expectNear((box.left + box.right) / 2 - rect(wrapper.closest("article")).left, 54 * 4 / 3);
+    });
+
+    it("does not float a shape in a table cell", () => {
+      expect(getComputedStyle(wrapperIn("case-cell")).cssFloat).toBe("none");
+    });
   });
 
   it("ignores an offset that is not a whole number of EMU", () => {

@@ -1502,12 +1502,15 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
 		const left = parseFloat(this.currentSectProps?.pageMargins?.left) || 0;
 		const right = parseFloat(this.currentSectProps?.pageMargins?.right) || 0;
 
-		if (!(page > 0))
+		// no cell width here, so a shape in a table cell takes the block path
+		if (!(page > 0) || this.currentCellPosition)
 			return null;
 
-		const column = page - left - right;
+		const count = this.currentSectProps.columns?.numberOfColumns || 1;
+		const textWidth = page - left - right;
+		const column = count > 1 ? (textWidth - (count - 1) * (parseFloat(this.currentSectProps.columns.space) || 0)) / count : textWidth;
 		const frames: Record<string, [number, number]> = {
-			page: [0, page], margin: [left, column], column: [left, column],
+			page: [0, page], margin: [left, textWidth], column: [left, column],
 			leftMargin: [0, left], insideMargin: [0, left], rightMargin: [page - right, right], outsideMargin: [page - right, right],
 		};
 		const [start, span] = hasOwn(frames, h.relative) ? frames[h.relative] : [left, column];
