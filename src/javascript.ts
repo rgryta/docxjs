@@ -84,6 +84,7 @@ export function measureTabSpans(spans: HTMLElement[]): void {
 			// a zero-size tab character keeps the tab in copied and searched text without taking room
 			span.textContent = "\t";
 			span.style.fontSize = "0";
+			span.style.whiteSpace = "pre";
 			span.style.display = "inline-block";
 			span.style.width = "0";
 		}

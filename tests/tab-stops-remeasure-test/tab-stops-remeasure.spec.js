@@ -106,10 +106,19 @@ ${body.join("\n")}
   });
 
   it("keeps a tab character in the text of a measured paragraph", async () => {
+    // a host page that resets span white-space must not drop the tab from the text
+    const override = document.createElement("style");
+    override.textContent = "body .docx span { white-space: normal; }";
+    document.head.appendChild(override);
     const container = await render(separateStops);
     docx.remeasureTabStops(container);
 
-    expect(run(container, "Left").closest("p").textContent).toBe("a\tLeft");
+    try {
+      expect(run(container, "Left").closest("p").innerText).toBe("a\tLeft");
+      expectAt(run(container, "Left").getBoundingClientRect().left, container, 144, "left");
+    } finally {
+      override.remove();
+    }
   });
 
   it("measures each tab of one paragraph after the tabs before it", async () => {
