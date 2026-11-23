@@ -73,6 +73,7 @@ describe("Shape groups", function () {
       spPr: solid("00FF00"),
       text: "<w:p><w:r><w:t>Not mirrored</w:t></w:r></w:p>",
     })))))),
+    para("case-rotated", run(inline(200, 100, groupGraphic(wgp(identity(200, 100, ' rot="5400000"'), box("00AA00", 0, 0, 10, 5)))))),
     para("case-centre-before"),
     `<w:p>${run(anchor({ h: posH("page", "<wp:align>center</wp:align>"), v: posV("paragraph", offset(292608)), w: 200, ht: 40 },
       groupGraphic(wgp(identity(200, 40), box("AA0000", 0, 0, 200, 40)))))}</w:p>`,
@@ -174,6 +175,12 @@ ${body}
     expectNear(image.top - group.top, 200 / 3);
     expectNear(image.width, 160 / 3);
     expectNear(image.height, 80 / 3);
+  });
+
+  it("rotates a top-level group by its own rotation", () => {
+    const matrix = new DOMMatrix(getComputedStyle(dmlGroup("case-rotated")).transform);
+    expect(matrix.b).toBeCloseTo(1, 5);
+    expect(matrix.a).toBeCloseTo(0, 5);
   });
 
   it("mirrors a flipped group's child positions but not its text", () => {
