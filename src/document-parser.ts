@@ -1490,25 +1490,26 @@ export class DocumentParser {
 	parseSpacing(node: Element, style: Record<string, string>) {
 		var before = xml.lengthAttr(node, "before");
 		var after = xml.lengthAttr(node, "after");
-		var line = xml.intAttr(node, "line", null);
-		var lineRule = xml.attr(node, "lineRule");
+		var line = xml.attr(node, "line");
+		var lineRule = xml.attr(node, "lineRule") ?? "auto";
 
 		if (before) style["margin-top"] = before;
 		if (after) style["margin-bottom"] = after;
 
-		if (line !== null) {
-			switch (lineRule) {
-				case "auto":
-					style["line-height"] = `${(line / 240).toFixed(2)}`;
-					break;
+		if (line) {
+			if (lineRule == "auto") {
+				// a unit (or a zero) is not a valid multiple of 240ths and would collapse the lines
+				const multiple = Number(line) / 240;
 
-				case "atLeast":
-					style["line-height"] = `calc(100% + ${line / 20}pt)`;
-					break;
+				if (multiple >= 0.005)
+					style["line-height"] = multiple.toFixed(2);
+			} else {
+				const length = convertLength(line, LengthUsage.Dxa);
 
-				default:
-					style["line-height"] = style["min-height"] = `${line / 20}pt`
-					break;
+				if (lineRule == "atLeast")
+					style["line-height"] = `calc(100% + ${length})`;
+				else
+					style["line-height"] = style["min-height"] = length;
 			}
 		}
 	}
