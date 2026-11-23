@@ -81,6 +81,8 @@ describe("DrawingML shapes", function () {
     para("case-float-left", run(anchor({ h: posH("margin", align("left")), v: posV("paragraph", offset(0)), w: 40, ht: 30, wrap: '<wp:wrapSquare wrapText="bothSides"/>' }, shapeGraphic(wsp({ w: 40, h: 30 })))),
       `<w:r><w:t xml:space="preserve">${"words that wrap beside the shape ".repeat(12)}</w:t></w:r>`),
     para("case-rtl", run(anchor({ h: posH("margin", offset(50)), v: posV("paragraph", offset(0)), wrap: "<wp:wrapTopAndBottom/>" }, shapeGraphic(wsp())))).replace("<w:p>", "<w:p><w:pPr><w:bidi/></w:pPr>"),
+    para("case-inside", run(anchor({ h: posH("insideMargin", offset(10)), v: posV("paragraph", offset(0)) }, shapeGraphic(wsp())))),
+    para("case-outside", run(anchor({ h: posH("outsideMargin", offset(5)), v: posV("paragraph", offset(0)) }, shapeGraphic(wsp())))),
     para("case-square-page", run(anchor({ h: posH("page", offset(72)), v: posV("page", offset(200)), wrap: '<wp:wrapSquare wrapText="bothSides"/>' }, shapeGraphic(wsp())))),
     para("case-pic-behind", run(anchor({ h: posH("page", offset(72)), v: posV("paragraph", offset(0)), behind: 1 }, picture))),
     para("case-choice-empty", run(alternate('<mc:Choice Requires="wps"/>', ovalFallback))),
@@ -228,6 +230,11 @@ ${content}
   it("offsets a top-and-bottom shape from the left in a right-to-left paragraph", () => {
     const wrapper = wrapperOf("case-rtl");
     expectNear(rect(wrapper).left - rect(wrapper.closest("article")).left, 50 * 4 / 3);
+  });
+
+  it("places inside- and outside-margin shapes in the left and right margins", () => {
+    expectNear(rect(shapeBox("case-inside")).left - rect(section()).left, 10 * 4 / 3);
+    expectNear(rect(shapeBox("case-outside")).left - rect(section()).left, (300 - 36 + 5) * 4 / 3);
   });
 
   it("places a square-wrapped shape anchored to the page on the page, out of the text flow", () => {
