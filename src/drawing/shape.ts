@@ -252,7 +252,15 @@ export function parseShapeDrawing(node: Element, shape: OpenXmlElement, nested: 
 }
 
 export function parseDrawingGroup(wgp: Element, extent: Element, parser: DocumentParser): OpenXmlElement {
-	return parseGroup(wgp, parser, extent ? emuPoints(xml.attr(extent, "cx")) : null, extent ? emuPoints(xml.attr(extent, "cy")) : null, false, false);
+	const result = parseGroup(wgp, parser, extent ? emuPoints(xml.attr(extent, "cx")) : null, extent ? emuPoints(xml.attr(extent, "cy")) : null, false, false);
+
+	if (result instanceof DrawingGroup) {
+		const props = xml.element(wgp, "grpSpPr");
+		const xfrm = props && xml.element(props, "xfrm");
+		result.rotation = ((xfrm && integer(xml.attr(xfrm, "rot"))) ?? 0) % 21600000 / 60000;
+	}
+
+	return result;
 }
 
 function xfrmPair(xfrm: Element, name: string, a: string, b: string): number[] {
