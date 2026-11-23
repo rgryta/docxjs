@@ -3,15 +3,24 @@
   const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
   let container;
 
-  async function render(setting) {
+  async function render(setting, styles = null, body = null) {
     const zip = new JSZip();
     zip.file("[Content_Types].xml", `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/></Types>`);
     zip.file("_rels/.rels", `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="doc" Type="${REL}/officeDocument" Target="word/document.xml"/></Relationships>`);
     zip.file("word/document.xml", `<w:document ${W}><w:body><w:p><w:r><w:t>discretionary\u00adhyphen</w:t></w:r></w:p><w:p><w:pPr><w:suppressAutoHyphens/></w:pPr><w:r><w:t>Suppressed</w:t></w:r></w:p><w:p><w:pPr><w:suppressAutoHyphens w:val="false"/></w:pPr><w:r><w:t>Inherited</w:t></w:r></w:p></w:body></w:document>`);
+    const rels = [];
     if (setting !== null) {
-      zip.file("word/_rels/document.xml.rels", `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="settings" Type="${REL}/settings" Target="settings.xml"/></Relationships>`);
+      rels.push(`<Relationship Id="settings" Type="${REL}/settings" Target="settings.xml"/>`);
       zip.file("word/settings.xml", `<w:settings ${W}>${setting}</w:settings>`);
     }
+    if (styles) {
+      rels.push(`<Relationship Id="styles" Type="${REL}/styles" Target="styles.xml"/>`);
+      zip.file("word/styles.xml", `<w:styles ${W}>${styles}</w:styles>`);
+    }
+    if (body)
+      zip.file("word/document.xml", `<w:document ${W}><w:body>${body}</w:body></w:document>`);
+    if (rels.length)
+      zip.file("word/_rels/document.xml.rels", `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join("")}</Relationships>`);
     container = document.createElement("div");
     document.body.appendChild(container);
     await docx.renderAsync(await zip.generateAsync({ type: "blob" }), container, null, { className: "hyphenation-test" });
@@ -21,6 +30,16 @@
   afterEach(() => container?.remove());
 
   describe("document automatic hyphenation", () => {
+    it("lets a paragraph turn off the suppression its style sets", async () => {
+      const styles = '<w:style w:type="paragraph" w:styleId="NoHyphen"><w:name w:val="NoHyphen"/><w:pPr><w:suppressAutoHyphens/></w:pPr></w:style>';
+      const body = '<w:p><w:pPr><w:pStyle w:val="NoHyphen"/></w:pPr><w:r><w:t>Styled</w:t></w:r></w:p>'
+        + '<w:p><w:pPr><w:pStyle w:val="NoHyphen"/><w:suppressAutoHyphens w:val="false"/></w:pPr><w:r><w:t>Overridden</w:t></w:r></w:p>';
+      const section = await render('<w:autoHyphenation w:val="false"/>', styles, body);
+      const [styled, overridden] = section.querySelectorAll("p");
+      expect(getComputedStyle(styled).hyphens).toBe("none");
+      expect(getComputedStyle(overridden).hyphens).toBe("manual");
+    });
+
     it("honours the setting and preserves discretionary hyphens and paragraph suppression", async () => {
       for (const [name, setting, expected] of [
       ["missing settings", null, "manual"],
