@@ -3,6 +3,8 @@ import { DocumentParser } from './document-parser';
 import { HtmlRenderer } from './html-renderer';
 import { h } from './html';
 
+export { remeasureTabStops } from './javascript';
+
 export interface Options {
     inWrapper: boolean;
     hideWrapperOnPrint: boolean;
