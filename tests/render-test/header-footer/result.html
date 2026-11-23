@@ -28,13 +28,19 @@ section.docx>footer { z-index: 1; }
   --docx-hlink-color: #0563C1;
   --docx-folHlink-color: #954F72;
 }
-</style><!--docxjs document styles--><style>:where(.docx) span {
+</style><!--docxjs document styles--><style>:where(.docx) {
+  font-family: 'Liberation Serif', NSimSun;
+}
+:where(.docx) span {
   font-family: 'Liberation Serif', NSimSun;
 }
 :where(.docx) p {
   hyphens: none;
 }
 .docx p, p.docx_normal {
+}
+.docx p, :where(.docx) p, p.docx_normal {
+  font-size: 12.00pt;
 }
 .docx p, :where(.docx) p span, p.docx_normal span {
   min-height: 12.00pt;
@@ -51,6 +57,10 @@ p.docx_a {
   margin-top: 12.00pt;
   margin-bottom: 6.00pt;
 }
+p.docx_a {
+  font-family: 'Liberation Sans', 'Microsoft YaHei';
+  font-size: 14.00pt;
+}
 p.docx_a span {
   font-family: 'Liberation Sans', 'Microsoft YaHei';
   min-height: 14.00pt;
@@ -60,6 +70,9 @@ p.docx_bodytext {
   margin-bottom: 7.00pt;
   line-height: 1.15;
 }
+p.docx_bodytext {
+  font-size: 12.00pt;
+}
 p.docx_bodytext span {
   min-height: 12.00pt;
   font-size: 12.00pt;
@@ -67,6 +80,9 @@ p.docx_bodytext span {
 p.docx_list {
   margin-bottom: 7.00pt;
   line-height: 1.15;
+}
+p.docx_list {
+  font-size: 12.00pt;
 }
 p.docx_list span {
   min-height: 12.00pt;
@@ -76,6 +92,10 @@ p.docx_caption {
   margin-top: 6.00pt;
   margin-bottom: 6.00pt;
 }
+p.docx_caption {
+  font-style: italic;
+  font-size: 12.00pt;
+}
 p.docx_caption span {
   font-style: italic;
   min-height: 12.00pt;
@@ -83,11 +103,17 @@ p.docx_caption span {
 }
 p.docx_a0 {
 }
+p.docx_a0 {
+  font-size: 12.00pt;
+}
 p.docx_a0 span {
   min-height: 12.00pt;
   font-size: 12.00pt;
 }
 p.docx_a1 {
+}
+p.docx_a1 {
+  font-size: 12.00pt;
 }
 p.docx_a1 span {
   min-height: 12.00pt;
@@ -95,11 +121,17 @@ p.docx_a1 span {
 }
 p.docx_header {
 }
+p.docx_header {
+  font-size: 12.00pt;
+}
 p.docx_header span {
   min-height: 12.00pt;
   font-size: 12.00pt;
 }
 p.docx_footer {
+}
+p.docx_footer {
+  font-size: 12.00pt;
 }
 p.docx_footer span {
   min-height: 12.00pt;
