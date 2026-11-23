@@ -69,13 +69,16 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 		...children.filter(c => c.tagName === "OL").map(block => ({ block, article: null as HTMLElement })),
 	];
 	// Empty paragraphs (such as the one holding a page break) never start a page.
-	let over = flow.findIndex(f => !isBlank(f.block) && f.block.getBoundingClientRect().bottom > limitY);
+	// the page also grows by the last block's bottom margin: margins do not collapse in the page's flex column
+	const last = flow[flow.length - 1].block;
+	const end = (block: HTMLElement) => block.getBoundingClientRect().bottom + (block === last ? parseFloat(getComputedStyle(block).marginBottom) || 0 : 0);
+	let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > limitY);
 	let splitLimit = limitY;
 	let keepNotes = false;
 
 	// Notes that do not fit push the last body lines down, as in Word, instead of taking a page of their own.
 	if (over > 0 && !flow[over].article && flow[over - 1].article) {
-		const bodyLimit = limitY - (flow[flow.length - 1].block.getBoundingClientRect().bottom - flow[over - 1].block.getBoundingClientRect().bottom);
+		const bodyLimit = limitY - (end(last) - flow[over - 1].block.getBoundingClientRect().bottom);
 		const bodyOver = flow.findIndex(f => f.article && !isBlank(f.block) && f.block.getBoundingClientRect().bottom > bodyLimit);
 
 		if (bodyOver > 0 && bodyLimit - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT) {

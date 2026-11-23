@@ -190,6 +190,21 @@
       }
     });
 
+    it("counts the notes list's bottom margin as part of the page", async () => {
+      for (let count = 20; count <= 40; count += 2) {
+        div?.remove();
+        div = await render({
+          body: `<w:p>${run("Ref")}<w:r><w:footnoteReference w:id="1"/></w:r></w:p>` + paras(count, 1),
+          parts: [{ id: "rIdN", type: "footnotes", target: "footnotes.xml", content: `<w:footnotes ${NS}><w:footnote w:id="1">${para("Note")}</w:footnote></w:footnotes>` }],
+        });
+        div.querySelector("section.docx > ol").style.marginBottom = "200px";
+
+        docx.paginate(div);
+
+        pages(div).forEach(page => expect(fits(page)).withContext(`${count} paragraphs`).toBe(true));
+      }
+    });
+
     it("splits the pages before a notes list taller than a page", async () => {
       div = await render({
         body: `<w:p>${run(lorem(2))}<w:r><w:footnoteReference w:id="1"/></w:r></w:p>` + paras(24),
