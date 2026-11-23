@@ -3954,6 +3954,7 @@
             this.className = "docx";
             this.styleMap = {};
             this.currentPart = null;
+            this.currentSectProps = null;
             this.tableVerticalMerges = [];
             this.currentVerticalMerge = null;
             this.tableCellPositions = [];
@@ -4201,8 +4202,10 @@
                     pageElement.setAttribute("data-page-format", pageNumber.chapStyle ? "other" : pageNumber.format);
                 if (prevProps != props && (props?.type == SectionType.EvenPage || props?.type == SectionType.OddPage))
                     pageElement.setAttribute("data-page-parity", props.type == SectionType.EvenPage ? "even" : "odd");
+                this.currentSectProps = props;
                 this.options.renderHeaders && this.renderHeaderFooter(props.headerRefs, props, result.length, prevProps != props, pageElement);
                 for (const sect of pages[i]) {
+                    this.currentSectProps = sect.sectProps;
                     var contentElement = this.createSectionContent(sect.sectProps);
                     this.renderElements(sect.elements, contentElement);
                     pageElement.appendChild(contentElement);
@@ -5097,6 +5100,7 @@ section.${c}>footer { z-index: 1; }
             const set = (key, value) => style.setProperty(key, value);
             const floating = !anchor.inline && !anchor.nested;
             const placed = floating && (anchor.wrap == "wrapNone" || hasOwn(verticalFrames, anchor.v.relative));
+            const float = floating && !placed && ["wrapSquare", "wrapTight", "wrapThrough"].includes(anchor.wrap) ? this.floatSide(anchor.h, width) : null;
             set("display", floating && !placed ? "block" : "inline-block");
             set("position", placed ? "absolute" : "relative");
             set("width", pt(width));
@@ -5109,7 +5113,12 @@ section.${c}>footer { z-index: 1; }
                 return;
             const left = anchorEdge(anchor.h, horizontalFrames, width);
             const hStatic = staticOffset(anchor.h, horizontalFrames);
-            if (placed && left != null)
+            if (float) {
+                set("float", float.side);
+                set(float.side == "left" ? "margin-left" : "margin-right", pt(float.margin));
+                set("display", "block");
+            }
+            else if (placed && left != null)
                 set("left", left);
             else if (left != null)
                 set("margin-left", `calc(${left} - ${marginLeft})`);
@@ -5128,6 +5137,22 @@ section.${c}>footer { z-index: 1; }
                 set("bottom", `calc(${pageHeight} - ${top} - ${pt(height)})`);
             else if (top != null)
                 set("top", top);
+        }
+        floatSide(h, width) {
+            const page = parseFloat(this.currentSectProps?.pageSize?.width);
+            const left = parseFloat(this.currentSectProps?.pageMargins?.left) || 0;
+            const right = parseFloat(this.currentSectProps?.pageMargins?.right) || 0;
+            if (!(page > 0))
+                return null;
+            const column = page - left - right;
+            const frames = {
+                page: [0, page], margin: [left, column], column: [left, column],
+                leftMargin: [0, left], insideMargin: [0, left], rightMargin: [page - right, right], outsideMargin: [page - right, right],
+            };
+            const [start, span] = hasOwn(frames, h.relative) ? frames[h.relative] : [left, column];
+            const share = { left: 0, inside: 0, center: 0.5, right: 1, outside: 1 }[h.align];
+            const x = (h.offset !== undefined || share == null ? start + (h.offset ?? 0) : start + (span - width) * share) - left;
+            return x + width / 2 <= column / 2 ? { side: "left", margin: x } : { side: "right", margin: column - x - width };
         }
         placeVmlBox(elem, style) {
             const box = elem.box;
