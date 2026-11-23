@@ -2,7 +2,7 @@ import { DocumentParser } from '../document-parser';
 import { DomType, IDomImage, OpenXmlElement, OpenXmlElementBase } from '../document/dom';
 import xml from '../parser/xml-parser';
 import { DmlTheme } from '../theme/theme';
-import { clamp } from '../utils';
+import { clamp, strictInteger } from '../utils';
 import { formatNumber, notDrawn, VmlTextBox } from '../vml/vml';
 import { DrawingGroup, GroupFrame, groupFrame, GroupPlace, placeChild } from './group';
 
@@ -80,7 +80,7 @@ export interface DmlDrawing extends OpenXmlElement {
 }
 
 export function integer(text: string): number {
-	const value = /^-?\d+$/.test(text?.trim() ?? "") ? parseInt(text) : NaN;
+	const value = strictInteger(text);
 	return Math.abs(value) <= maxEmu ? value : null;
 }
 
