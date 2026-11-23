@@ -52,7 +52,8 @@ describe("VML shapes", function () {
   ].join("\n");
 
   const footer = `<w:ftr ${NS}><w:p>${pict(`<v:rect style="${PAGE}margin-top:176pt;width:50pt;height:12pt;mso-position-vertical-relative:page"/>`)}` +
-    `${pict(`<v:rect fillcolor="#00ff00" style="${PAGE}margin-left:200pt;margin-top:20pt;width:30pt;height:12pt;mso-position-vertical-relative:margin"/>`)}</w:p></w:ftr>`;
+    `${pict(`<v:rect fillcolor="#00ff00" style="${PAGE}margin-left:200pt;margin-top:20pt;width:30pt;height:12pt;mso-position-vertical-relative:margin"/>`)}` +
+    `${pict(`<v:rect fillcolor="#0000ff" style="${PAGE}width:612pt;height:200pt;z-index:-1;mso-position-vertical-relative:page"/>`)}</w:p></w:ftr>`;
 
   const header = `<w:hdr ${NS}><w:p>${pict(`<v:rect style="${PAGE}width:50pt;height:12pt;z-index:-1;mso-position-vertical-relative:page"/>`)}</w:p></w:hdr>`;
 
@@ -241,8 +242,19 @@ ${body}
     expect(reason("case-watermark-bare")).toBe("watermark");
   });
 
-  it("keeps a shape behind the text visible in the header", () => {
-    expect(getComputedStyle(section().querySelector("header")).zIndex).toBe("1");
+  it("keeps a shape behind the text visible in the header and footer", () => {
+    expect(getComputedStyle(section().querySelector("header")).zIndex).toBe("0");
+    expect(getComputedStyle(section().querySelector("footer")).zIndex).toBe("0");
+  });
+
+  it("paints a footer shape behind the text under the body text", () => {
+    const text = paragraph("filler-19").querySelector("span");
+    text.scrollIntoView({ block: "center" });
+    const box = rect(text);
+    const hit = document.elementFromPoint(box.left + 2, box.top + box.height / 2);
+    window.scrollTo(0, 0);
+    expect(rect(section().querySelector('footer svg rect[fill="#0000ff"]')).top).toBeLessThan(rect(text).top);
+    expect(text.contains(hit)).toBeTrue();
   });
 
   it("does not mark a picture shape whose shape type is missing", () => {
