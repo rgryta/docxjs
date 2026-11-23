@@ -23,7 +23,7 @@ import { BaseHeaderFooterPart, FooterPart } from './header-footer/parts';
 import { Part } from './common/part';
 import { dashPatterns, formatNumber, paintAttrs, VmlElement, VmlSvgPart, VmlTextBox } from './vml/vml';
 import { DmlAnchor, DmlAxis, DmlColor, DmlDrawing, DmlLineEnd, DmlShape, DmlStyleRef, formatColor, ResolvedColor, resolveColor } from './drawing/shape';
-import { arrowHead, DrawingGroup, GroupPlace } from './drawing/group';
+import { arrowBase, arrowHead, DrawingGroup, GroupPlace } from './drawing/group';
 import { WmlCommentRangeStart, WmlCommentReference } from './comments/elements';
 import { cx, h, ns } from './html';
 
@@ -1496,6 +1496,8 @@ section.${c}>footer { z-index: 1; }
 				}
 
 				const d = arrowHead(ends[i], ends[1 - i], paint.strokeWidth, headScale[end.width] ?? 3, headScale[end.length] ?? 3);
+				const [bx, by] = arrowBase(ends[i], ends[1 - i], paint.strokeWidth, headScale[end.length] ?? 3);
+				Object.assign(parts[0].attrs, i ? { x2: formatNumber(bx), y2: formatNumber(by) } : { x1: formatNumber(bx), y1: formatNumber(by) });
 				const head: Record<string, string> = { d, fill: paint.stroke, stroke: "none" };
 				if (stroke.alpha < 1) head["fill-opacity"] = formatNumber(stroke.alpha);
 				parts.push({ tagName: "path", attrs: head });
