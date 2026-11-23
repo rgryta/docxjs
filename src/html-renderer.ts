@@ -1406,7 +1406,7 @@ section.${c}>footer { z-index: 1; }
 		}
 
 		if (elem.children[0].type == DomType.Image) {
-			this.placeShapeWrapper(elem.anchor, false, wrapper.style, elem.anchor.width, elem.anchor.height);
+			this.placeShapeWrapper(elem.anchor, false, wrapper.style, elem.anchor.width ?? 0, elem.anchor.height ?? 0);
 			wrapper.appendChild(this.renderImage(elem.children[0] as IDomImage));
 			return wrapper;
 		}
