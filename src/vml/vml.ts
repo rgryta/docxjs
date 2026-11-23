@@ -18,8 +18,8 @@ export interface VmlSvgPart {
 
 export interface VmlBox {
 	position?: string;
-	placed: boolean;
 	hAlign?: string;
+	vAlign?: string;
 	hRelative?: string;
 	vRelative?: string;
 	x: number;
@@ -225,8 +225,8 @@ const styleRules = new Map<string, RegExp>([
 	["visibility", /^(hidden|visible|inherit)$/],
 	["mso-position-horizontal", /^(absolute|left|center|right|inside|outside|top|bottom)$/],
 	["mso-position-vertical", /^(absolute|left|center|right|inside|outside|top|bottom)$/],
-	["mso-position-horizontal-relative", /^(page|margin|text|char)$/],
-	["mso-position-vertical-relative", /^(page|margin|text|line)$/],
+	["mso-position-horizontal-relative", /^(page|margin|text|char|(left|right|inner|outer)-margin-area)$/],
+	["mso-position-vertical-relative", /^(page|margin|text|line|(top|bottom|inner|outer)-margin-area)$/],
 	["v-text-anchor", /^(top|middle|bottom)(-center|-baseline|-center-baseline)?$/],
 ]);
 
@@ -273,8 +273,8 @@ function parseBox(style: Map<string, string>): VmlBox {
 
 	return {
 		position,
-		placed: position == "absolute" && (!hAlign || hAlign == "absolute"),
 		hAlign,
+		vAlign: style.get("mso-position-vertical"),
 		hRelative: style.get("mso-position-horizontal-relative"),
 		vRelative: style.get("mso-position-vertical-relative"),
 		x: lengthPoints(style.get("margin-left")) ?? lengthPoints(style.get("left")) ?? 0,
