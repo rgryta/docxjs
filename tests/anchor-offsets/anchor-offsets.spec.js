@@ -20,7 +20,8 @@
       `<pic:nvPicPr><pic:cNvPr id="0" name=""/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdPic"/><a:srcRect/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
       `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${SIZE}" cy="${SIZE}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>` +
       `</pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>`;
-    const block = id => `<w:p><w:pPr><w:spacing w:line="300"/></w:pPr>${avatar}<w:r><w:rPr><w:b/></w:rPr><w:br/><w:t xml:space="preserve">${id} </w:t></w:r>` +
+    const noExtent = avatar.replace(/<wp:extent[^>]*\/>/, "");
+    const block = (id, picture = avatar) => `<w:p><w:pPr><w:spacing w:line="300"/></w:pPr>${picture}<w:r><w:rPr><w:b/></w:rPr><w:br/><w:t xml:space="preserve">${id} </w:t></w:r>` +
       `<w:r><w:t>Body line under the heading</w:t></w:r></w:p>`;
 
     async function buildDocx() {
@@ -43,7 +44,7 @@
       zip.file("word/media/avatar.png", PNG, { base64: true });
       zip.file("word/document.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document ${NS}><w:body>
-${block("first")}${block("second")}
+${block("first")}${block("second")}${block("third", noExtent)}
 <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>
 </w:body></w:document>`);
       return zip.generateAsync({ type: "blob" });
@@ -60,6 +61,10 @@ ${block("first")}${block("second")}
     afterAll(() => container.remove());
 
     const MARGIN = 96;
+    it("renders an anchored picture that has no extent", () => {
+      expect(Array.from(container.querySelectorAll("article p")).some(p => p.textContent.startsWith("third "))).toBe(true);
+    });
+
     const rect = element => element.getBoundingClientRect();
     const paragraph = id => Array.from(container.querySelectorAll("article p")).find(p => p.textContent.startsWith(`${id} `));
     const expectNear = (actual, expected, tolerance = 1) => expect(Math.abs(actual - expected)).withContext(`${actual} vs ${expected}`).toBeLessThanOrEqual(tolerance);
