@@ -100,7 +100,8 @@ export function canDrawChoice(choice: Element): boolean {
 
 	return !!requires
 		&& requires.split(" ").every(prefix => prefix && choice.lookupNamespaceURI(prefix) == shapeNamespace)
-		&& children.length > 0
+		// the parser takes one drawing from a Choice, so a Choice with more keeps its Fallback
+		&& children.length == 1
 		&& children.every(child => child.localName == "drawing" && drawsShapes(child));
 }
 
