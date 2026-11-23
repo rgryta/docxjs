@@ -150,8 +150,13 @@ ${body.join("\n")}
   });
 
   it("skips a detached render and measures it once attached", async () => {
+    // run the renderer's measuring timer right away instead of waiting for it
+    const realSetTimeout = window.setTimeout.bind(window);
+    const timers = [];
+    spyOn(window, "setTimeout").and.callFake((fn, ms, ...args) => ms === 500 ? (timers.push(fn), 0) : realSetTimeout(fn, ms, ...args));
     const container = await render(separateStops, undefined, false);
-    await new Promise(r => setTimeout(r, 600));
+    expect(timers.length).toBeGreaterThan(0);
+    timers.forEach(fn => fn());
 
     tabSpans(container).forEach(s => {
       expect(s.textContent).toBe("\u2003");
@@ -234,14 +239,23 @@ ${body.join("\n")}
     expectAt(run(container, "Right").getBoundingClientRect().right, container, 468, "right", 0.5);
   });
 
+  it("does not treat a bar tab as a stop", async () => {
+    const container = await render([
+      paragraph(tabs(["bar", 2880], ["right", 9360]), "a", "\t", "Right"),
+    ]);
+    docx.remeasureTabStops(container);
+
+    expectAt(run(container, "Right").getBoundingClientRect().right, container, 468, "right");
+  });
+
   it("leaves tabs in a right-to-left paragraph unmeasured", async () => {
     const container = await render([
-      paragraph(`<w:bidi/>${tabs(["right", 9360])}`, "a", "	", "Right"),
+      paragraph(`<w:bidi/>${tabs(["right", 9360])}`, "a", "\t", "Right"),
     ]);
     docx.remeasureTabStops(container);
 
     tabSpans(container).forEach(s => {
-      expect(s.textContent).toBe(" ");
+      expect(s.textContent).toBe("\u2003");
       expect(s.getAttribute("style")).toBeNull();
     });
   });
