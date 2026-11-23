@@ -9,10 +9,7 @@ describe("tab stops", function () {
 
         docx.remeasureTabStops(div);
 
-        // the paragraph carries ind left=1440 hanging=720 and a left tab stop at 1440,
-        // so the run after the tab must start exactly on the paragraph's own left indent
-        // (= its border box). With the origin measured wrong the text lands a full
-        // margin (~96px) to the right.
+        // ind left=1440 with a left stop at 1440: the run after the tab starts on the paragraph's own left edge
         const p = div.querySelector("section.docx article > p");
         const spans = Array.from(p.querySelectorAll("span")).filter(s => s.textContent.trim());
         const after = spans[spans.length - 1];

@@ -163,6 +163,9 @@ function setFieldText(field: HTMLElement, text: string): boolean {
 		first = false;
 	}
 
+	if (first)
+		(field.firstElementChild ?? field).appendChild(document.createTextNode(text));
+
 	return field.textContent != before;
 }
 
@@ -193,16 +196,42 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	if (pageSpace < MIN_SPLIT_HEIGHT)
 		return null;
 
+	// A footnote list stays on the page with its references: the page keeps as many notes as it keeps
+	// references, and the body gives up room for them. The other notes move to a list on the next page.
+	const footnotes = children.find(c => c.tagName === "OL" && c.dataset.docxNotes === "footnotes");
+	const items = footnotes ? Array.from(footnotes.children) as HTMLElement[] : [];
+	const refs = footnotes ? articles.flatMap(a => Array.from(a.querySelectorAll<HTMLElement>("sup[data-docx-footnote]"))) : [];
+	let keptNotes = items.length;
+	let notesLimit = limitY;
+
+	if (items.length && refs.length) {
+		const chrome = outerHeight(footnotes) - (items[items.length - 1].getBoundingClientRect().bottom - items[0].getBoundingClientRect().top);
+		keptNotes = 0;
+
+		for (let k = Math.min(items.length, refs.length); k > 0; k--) {
+			const limit = limitY - chrome - (items[k - 1].getBoundingClientRect().bottom - items[0].getBoundingClientRect().top);
+
+			if (limit - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT && refs.filter(r => r.getBoundingClientRect().bottom <= limit).length >= k) {
+				keptNotes = k;
+				notesLimit = limit;
+				break;
+			}
+		}
+	} else if (items.length && limitY - outerHeight(footnotes) - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT) {
+		notesLimit = limitY - outerHeight(footnotes);  // notes carried over from the page before keep their room
+	}
+
 	const flow = [
 		...articles.flatMap(article => (Array.from(article.children) as HTMLElement[]).map(block => ({ block, article }))),
-		...children.filter(c => c.tagName === "OL").map(block => ({ block, article: null as HTMLElement })),
+		...children.filter(c => c.tagName === "OL" && c !== footnotes).map(block => ({ block, article: null as HTMLElement })),
 	];
 	// Empty paragraphs (such as the one holding a page break) never start a page.
 	// the page also grows by the last block's bottom margin: margins do not collapse in the page's flex column
 	const last = flow[flow.length - 1].block;
 	const end = (block: HTMLElement) => block.getBoundingClientRect().bottom + (block === last ? parseFloat(getComputedStyle(block).marginBottom) || 0 : 0);
-	let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > limitY);
-	let splitLimit = limitY;
+	const bodyEnd = notesLimit;
+	let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > bodyEnd);
+	let splitLimit = bodyEnd;
 	let keepNotes = false;
 
 	// Notes that do not fit push the last body lines down, as in Word, instead of taking a page of their own.
@@ -217,25 +246,25 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 		}
 	}
 
-	if (over < 0) {
+	if (over < 0 && keptNotes == items.length) {
 		hideBlankOverflow(flow, limitY);
 		return null;
 	}
 
-	const overArticle = flow[over].article;
-	let cut = over;
+	const overArticle = over < 0 ? null : flow[over].article;
+	let cut = over < 0 ? flow.length : over;
 	let carry: HTMLElement = null;
 
-	if (flow[over].block.tagName === "TABLE")
+	if (over >= 0 && flow[over].block.tagName === "TABLE")
 		carry = splitTable(flow[over].block as HTMLTableElement, splitLimit);
-	else if (flow[over].block.tagName === "P")
+	else if (over >= 0 && flow[over].block.tagName === "P")
 		carry = splitParagraph(flow[over].block, splitLimit, className);
 
-	const stays = !carry && unbreakableHeight(flow[over].block) > pageSpace;
+	const stays = over >= 0 && !carry && unbreakableHeight(flow[over].block) > Math.max(pageSpace, pageSpace + headerFooterSaving(children));
 
 	if (carry || stays) {
 		cut = over + 1;  // a block that cannot split and is taller than a page would overflow the next page too
-	} else {
+	} else if (over >= 0) {
 		while (cut > 0 && flow[cut - 1].article === overArticle && overArticle && getComputedStyle(flow[cut - 1].block).breakAfter === "avoid")
 			cut--;
 
@@ -244,7 +273,7 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	}
 
 	// the notes of a page whose tall block stays where it starts stay with it
-	if (!carry && flow.slice(cut).every(f => f.article ? isBlank(f.block) : stays)) {
+	if (!carry && keptNotes == items.length && flow.slice(cut).every(f => f.article ? isBlank(f.block) : stays)) {
 		hideBlankOverflow(flow, limitY);
 		return null;
 	}
@@ -282,6 +311,17 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 		}
 	}
 
+	if (keptNotes < items.length) {
+		const rest = keptNotes ? footnotes.cloneNode(false) as HTMLElement : footnotes;
+
+		if (keptNotes) {
+			rest.setAttribute("start", String(Number(footnotes.getAttribute("start") ?? 1) + keptNotes));
+			rest.append(...items.slice(keptNotes));
+		}
+
+		next.appendChild(rest);
+	}
+
 	next.append(...notes);
 
 	for (const c of children) {
@@ -301,11 +341,42 @@ function showHeaderFooter(page: HTMLElement, number: number) {
 			?? (number % 2 == 0 ? find("even") : null)
 			?? find("default");
 
+		// without the paginate option only the renderer's pick exists; keep it rather than hide every header
+		if (!pick)
+			continue;
+
 		for (const c of alternates) {
 			if ((c === pick) === (c.style.display === "none"))
 				c.style.display = c === pick ? "" : "none";
 		}
 	}
+}
+
+/**
+ * How much more room a page split off this one has: it shows the shortest alternate header and footer
+ * other than the first-page ones, so a tall letterhead on the first page leaves more space on the next.
+ */
+function headerFooterSaving(children: HTMLElement[]): number {
+	let saving = 0;
+
+	for (const tag of ["HEADER", "FOOTER"]) {
+		const shown = children.find(c => c.tagName === tag && getComputedStyle(c).display !== "none");
+		const next = children.filter(c => c.tagName === tag && c.dataset.docxHf !== "first");
+		saving += (shown ? outerHeight(shown) : 0) - (next.length ? Math.min(...next.map(shownHeight)) : 0);
+	}
+
+	return saving;
+}
+
+/** Outer height of a header or footer as if shown; a hidden alternate is shown just long enough to measure it. */
+function shownHeight(el: HTMLElement): number {
+	if (el.style.display !== "none")
+		return outerHeight(el);
+
+	el.style.display = "";
+	const height = outerHeight(el);
+	el.style.display = "none";
+	return height;
 }
 
 function hideBlankOverflow(flow: { block: HTMLElement, article: HTMLElement }[], limitY: number) {

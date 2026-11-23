@@ -110,7 +110,7 @@ With `paginate: true`, pages that are taller than the page are split after rende
 - a paragraph with "keep with next" (`break-after: avoid`, such as a heading) moves along with the next block
 - tables split between rows, and header rows (`<thead>`) repeat on the next page
 
-It measures the rendered layout once, so the container must be in the document when `renderAsync` resolves. When you insert the nodes from `renderDocument` yourself, call `paginate(container)` afterwards. A single paragraph or table row taller than a page is not split.
+It measures the rendered layout, so the container must be in the document when `renderAsync` resolves. It also fills `PAGE` and `NUMPAGES` fields with each page's number and the page count. When you insert the nodes from `renderDocument` yourself, call `paginate(container)` afterwards, and pass `paginate: true` to `renderDocument` so each split page can show its own first, even or default header and footer. A single paragraph or table row taller than a page is not split.
 
 Without `paginate`, or if page breaking must match Word exactly, I would recommend:
 - try to insert manual break point as much as you could

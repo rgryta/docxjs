@@ -77,6 +77,35 @@ const verticalFrames: Record<string, [string, string]> = {
 	bottomMargin: [`(${pageHeight} - ${marginBottom})`, marginBottom],
 };
 
+// the frames a VML shape positions against, per mso-position-*-relative value (the same frames as DrawingML)
+const vmlHorizontalFrames = new Map<string, [string, string]>([
+	["page", horizontalFrames.page], ["margin", textColumn], ["text", textColumn],
+	["left-margin-area", horizontalFrames.leftMargin], ["inner-margin-area", horizontalFrames.leftMargin],
+	["right-margin-area", horizontalFrames.rightMargin], ["outer-margin-area", horizontalFrames.rightMargin],
+]);
+const vmlVerticalFrames = new Map<string, [string, string]>([
+	["page", verticalFrames.page], ["margin", verticalFrames.margin],
+	["top-margin-area", verticalFrames.topMargin], ["inner-margin-area", verticalFrames.topMargin],
+	["bottom-margin-area", verticalFrames.bottomMargin], ["outer-margin-area", verticalFrames.bottomMargin],
+]);
+// where an aligned shape sits in its frame, as a share of the room left; inside and outside are taken as left and right
+const vmlAlignShare = new Map([["left", 0], ["top", 0], ["inside", 0], ["center", 0.5], ["right", 1], ["bottom", 1], ["outside", 1]]);
+
+/** The CSS start of a VML shape along one axis, or null when it keeps its place in the line (no frame). */
+function vmlEdge(frames: Map<string, [string, string]>, relative: string, align: string, offset: number, size: number): string {
+	const frame = frames.get(relative);
+
+	if (!frame)
+		return null;
+
+	const [start, length] = frame;
+	const share = vmlAlignShare.get(align);
+
+	return share == null || size == null
+		? `calc(${start} + ${formatNumber(offset)}pt)`
+		: `calc(${start} + (${length} - ${formatNumber(size)}pt) * ${share})`;
+}
+
 const drawnHeads = new Set(["triangle", "arrow", "stealth"]);
 const headScale: Record<string, number> = { sm: 2, med: 3, lg: 5 };
 
@@ -415,12 +444,12 @@ export class HtmlRenderer {
 			}
 
 			if (this.options.renderFootnotes) {
-				const notes = this.renderNotes(this.currentFootnoteIds, this.footnoteMap);
+				const notes = this.renderNotes(this.currentFootnoteIds, this.footnoteMap, "footnotes");
 				notes && pageElement.appendChild(notes);
 			}
 
 			if (this.options.renderEndnotes && i == l - 1) {
-				const notes = this.renderNotes(this.currentEndnoteIds, this.endnoteMap);
+				const notes = this.renderNotes(this.currentEndnoteIds, this.endnoteMap, "endnotes");
 				notes && pageElement.appendChild(notes);
 			}
 
@@ -529,7 +558,8 @@ export class HtmlRenderer {
 				const s = this.findStyle(p.styleName);
 
 				if (p.pageBreakBefore || s?.paragraphProps?.pageBreakBefore) {
-					current.sectProps = sectProps;
+					// sectProps may still hold an earlier section's props; leave the piece to the backward fill below
+					current.sectProps = null;
 					current.pageBreak = true;
 					current = { sectProps: null, elements: [], pageBreak: false };
 					result.push(current);
@@ -845,11 +875,22 @@ section.${c}>footer { z-index: 1; }
 
 			for (const subStyle of subStyles) {
 				//TODO temporary disable modificators until test it well
+				var selector = `${style.target ?? ''}.${style.cssName}`; //${subStyle.mod ?? ''}
 				const subTarget = style.target != subStyle.target ? ` ${subStyle.target}` : '';
-				var selector = `${style.target ?? ''}.${style.cssName}${subTarget}`; //${subStyle.mod ?? ''} 
 
-				if (defautStyles[style.target] == style)
-					selector = `${subTarget ? `:where(.${this.className})` : `.${this.className}`} ${style.target}${subTarget}, ` + selector;
+				// document defaults have no target and sit below every style
+				if (style.target == null)
+					selector = `:where(${selector})`;
+
+				selector += subTarget;
+
+				// a default style's own values sit on its element; its run (or cell) values add no specificity, so any style beats them.
+				// Normal's run values also go on the paragraph, so its line box is sized from them.
+				if (defautStyles[style.target] == style) {
+					const own = !subTarget || style.target == "p" ? `.${this.className} ${style.target}, ` : "";
+					const sub = subTarget ? `:where(.${this.className}) ${style.target}${subTarget}, ` : "";
+					selector = own + sub + selector;
+				}
 
 				if (subStyle.target == "span" && (style.target == null || style.target == "p")) {
 					const font = Object.fromEntries(Object.entries(subStyle.values).filter(([key]) =>
@@ -869,11 +910,13 @@ section.${c}>footer { z-index: 1; }
 		];
 	}
 
-	renderNotes(noteIds: string[], notesMap: Record<string, WmlBaseNote>) {
+	renderNotes(noteIds: string[], notesMap: Record<string, WmlBaseNote>, kind: "footnotes" | "endnotes") {
 		var notes = noteIds.map(id => notesMap[id]).filter(x => x);
 
 		if (notes.length > 0) {
-			return this.h({ tagName: "ol", children: this.renderElements(notes) });
+			const list = this.h({ tagName: "ol", children: this.renderElements(notes) }) as HTMLElement;
+			list.setAttribute("data-docx-notes", kind);  // paginate keeps footnotes on the page of their references
+			return list;
 		}
 	}
 
@@ -1254,7 +1297,9 @@ section.${c}>footer { z-index: 1; }
 
 	renderFootnoteReference(elem: WmlNoteReference) {
 		this.currentFootnoteIds.push(elem.id);
-		return this.h({ tagName: "sup", children: [`${this.currentFootnoteIds.length}`] });
+		const ref = this.h({ tagName: "sup", children: [`${this.currentFootnoteIds.length}`] }) as HTMLElement;
+		ref.setAttribute("data-docx-footnote", "");
+		return ref;
 	}
 
 	renderEndnoteReference(elem: WmlNoteReference) {
@@ -1427,7 +1472,9 @@ section.${c}>footer { z-index: 1; }
 	}
 
 	renderShape(box: HTMLElement, shape: ShapeContent, fitted: boolean, textColor: string = null): SVGSVGElement {
-		box.style.setProperty("pointer-events", "none");
+		// a drawn shape lets clicks through to the text under it; a picture keeps them, so a linked picture still opens
+		if (!shape.imageHref)
+			box.style.setProperty("pointer-events", "none");
 
 		const svg = this.createSvgElement("svg");
 
@@ -1623,9 +1670,10 @@ section.${c}>footer { z-index: 1; }
 	placeShapeWrapper(anchor: DmlAnchor, autoFit: boolean, style: CSSStyleDeclaration, width: number, height: number) {
 		const set = (key: string, value: string) => style.setProperty(key, value);
 		const floating = !anchor.inline && !anchor.nested;
-		const placed = floating && anchor.wrap == "wrapNone";
+		// text does not flow around square, tight or through wrapping: a shape anchored to the paragraph or line
+		// takes its own block, and one anchored to the page or margin is placed there like a no-wrap shape
+		const placed = floating && (anchor.wrap == "wrapNone" || hasOwn(verticalFrames, anchor.v.relative));
 
-		// text does not flow around square, tight or through wrapping: such a shape takes its own block
 		set("display", floating && !placed ? "block" : "inline-block");
 		set("position", placed ? "absolute" : "relative");
 		set("width", pt(width));
@@ -1681,34 +1729,23 @@ section.${c}>footer { z-index: 1; }
 			set("display", "block");
 			set("margin-left", box.hRelative == "page" ? `calc(${pt(box.x)} - var(--docx-margin-left, 0pt))` : pt(box.x));
 			set("margin-top", pt(box.y));
-		} else if (box.placed) {
+		} else if (box.position == "absolute") {
 			set("position", "absolute");
+			const left = vmlEdge(vmlHorizontalFrames, box.hRelative, box.hAlign, box.x, box.width);
+			const top = vmlEdge(vmlVerticalFrames, box.vRelative, box.vAlign, box.y, box.height);
 
-			switch (box.hRelative) {
-				case "page": set("left", pt(box.x)); break;
-				case "margin":
-				case "text": set("left", `calc(var(--docx-margin-left, 0pt) + ${pt(box.x)})`); break;
-				default: set("margin-left", pt(box.x)); break;
-			}
-
-			const top = box.vRelative == "page" ? pt(box.y)
-				: box.vRelative == "margin" ? `var(--docx-margin-top, 0pt) + ${pt(box.y)}` : null;
+			if (left == null)
+				set("margin-left", pt(box.x));
+			else
+				set("left", left);
 
 			if (top == null)
 				set("margin-top", pt(box.y));
 			else if (this.currentPart instanceof FooterPart)
-				set("bottom", `calc(var(--docx-page-height, 100%) - ${top} - ${pt(box.height ?? 0)})`);
+				set("bottom", `calc(var(--docx-page-height, 100%) - (${top}) - ${pt(box.height ?? 0)})`);
 			else
-				set("top", box.vRelative == "page" ? top : `calc(${top})`);
-		} else if (box.position == "absolute" && box.width != null && (box.hAlign == "center" || box.hAlign == "right") && (box.hRelative == "page" || box.hRelative == "margin")) {
-			const from = box.hRelative == "page" ? "0pt" : "var(--docx-margin-left, 0pt)";
-			const span = box.hRelative == "page" ? "var(--docx-page-width, 0pt)"
-				: "(var(--docx-page-width, 0pt) - var(--docx-margin-left, 0pt) - var(--docx-margin-right, 0pt))";
-
-			set("position", "absolute");
-			set("left", `calc(${from} + ${span}${box.hAlign == "center" ? ` / 2 - ${pt(box.width / 2)}` : ` - ${pt(box.width)}`})`);
+				set("top", top);
 		} else {
-			if (box.position == "absolute") set("position", "absolute");
 			if (box.x) set("margin-left", pt(box.x));
 			if (box.y) set("margin-top", pt(box.y));
 		}

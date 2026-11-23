@@ -1423,7 +1423,7 @@ function parseVmlElement(elem, parser, watermarkAllowed = false, frame = null) {
         if (!mapped)
             return notDrawn("group-child");
         result.place = mapped.place;
-        result.box = { placed: false, x: 0, y: 0, width: mapped.width, height: mapped.height, hidden: result.box.hidden };
+        result.box = { x: 0, y: 0, width: mapped.width, height: mapped.height, hidden: result.box.hidden };
     }
     const imageId = imageData && globalXmlParser.attr(imageData, "id");
     const paint = parsePaint$1(elem, shapeType, stroke, fill);
@@ -1578,8 +1578,8 @@ const styleRules = new Map([
     ["visibility", /^(hidden|visible|inherit)$/],
     ["mso-position-horizontal", /^(absolute|left|center|right|inside|outside|top|bottom)$/],
     ["mso-position-vertical", /^(absolute|left|center|right|inside|outside|top|bottom)$/],
-    ["mso-position-horizontal-relative", /^(page|margin|text|char)$/],
-    ["mso-position-vertical-relative", /^(page|margin|text|line)$/],
+    ["mso-position-horizontal-relative", /^(page|margin|text|char|(left|right|inner|outer)-margin-area)$/],
+    ["mso-position-vertical-relative", /^(page|margin|text|line|(top|bottom|inner|outer)-margin-area)$/],
     ["v-text-anchor", /^(top|middle|bottom)(-center|-baseline|-center-baseline)?$/],
 ]);
 function parseVmlStyle(text) {
@@ -1615,8 +1615,8 @@ function parseBox(style) {
     const rotation = style.get("rotation");
     return {
         position,
-        placed: position == "absolute" && (!hAlign || hAlign == "absolute"),
         hAlign,
+        vAlign: style.get("mso-position-vertical"),
         hRelative: style.get("mso-position-horizontal-relative"),
         vRelative: style.get("mso-position-vertical-relative"),
         x: lengthPoints(style.get("margin-left")) ?? lengthPoints(style.get("left")) ?? 0,
@@ -1737,11 +1737,19 @@ function parsePaint$1(elem, shapeType, stroke, fill) {
     const weight = (stroke && globalXmlParser.attr(stroke, "weight")) ?? globalXmlParser.attr(elem, "strokeweight");
     const dashStyle = stroke && globalXmlParser.attr(stroke, "dashstyle")?.trim().toLowerCase();
     return {
-        fill: filled ? vmlColor(globalXmlParser.attr(elem, "fillcolor") ?? shapeType.fillcolor ?? "white") : null,
+        fill: filled ? vmlColor((fill && globalXmlParser.attr(fill, "color")) ?? globalXmlParser.attr(elem, "fillcolor") ?? shapeType.fillcolor ?? "white") : null,
+        fillOpacity: fill ? vmlFraction(globalXmlParser.attr(fill, "opacity")) : undefined,
         stroke: stroked ? vmlColor(strokeColor) : null,
         strokeWidth: strokeWeight(weight),
         dash: Object.prototype.hasOwnProperty.call(dashPatterns, dashStyle) ? dashPatterns[dashStyle] : undefined,
     };
+}
+function vmlFraction(value) {
+    const match = /^\s*(\d*\.?\d+)\s*(f|%)?\s*$/.exec(value ?? "");
+    if (!match)
+        return undefined;
+    const number = parseFloat(match[1]);
+    return clamp(match[2] == "f" ? number / 65536 : match[2] == "%" ? number / 100 : number, 0, 1);
 }
 function strokeWeight(value) {
     const text = value?.trim().toLowerCase();
@@ -1756,6 +1764,8 @@ function paintAttrs(paint, filled, stroked) {
         fill: (filled && paint.fill) || "none",
         stroke: (stroked && paint.stroke) || "none",
     };
+    if (result.fill != "none" && paint.fillOpacity < 1)
+        result["fill-opacity"] = formatNumber(paint.fillOpacity);
     if (result.stroke != "none") {
         result["stroke-width"] = `${formatNumber(paint.strokeWidth)}pt`;
         if (paint.dash)
@@ -1905,7 +1915,7 @@ function canDrawChoice(choice) {
     const children = globalXmlParser.elements(choice);
     return !!requires
         && requires.split(" ").every(prefix => prefix && [shapeNamespace, groupNamespace].includes(choice.lookupNamespaceURI(prefix)))
-        && children.length > 0
+        && children.length == 1
         && children.every(child => child.localName == "drawing" && drawsShapes(child));
 }
 function drawsShapes(drawing) {
@@ -2044,7 +2054,8 @@ function parseGroup(group, parser, width, height, flipH, flipV) {
         return notDrawn("group-child");
     const children = parser.nested(() => globalXmlParser.elements(group)
         .filter(child => !groupProps.has(child.localName))
-        .map(child => parseGroupChild(child, parser, frame)));
+        .map(child => parseGroupChild(child, parser, frame))
+        .filter(child => child != null));
     if (!children)
         return notDrawn("depth");
     const result = new DrawingGroup();
@@ -2053,8 +2064,15 @@ function parseGroup(group, parser, width, height, flipH, flipV) {
     result.children = children;
     return result;
 }
+function isHidden(child) {
+    const wrapper = globalXmlParser.elements(child).find(el => el.localName.startsWith("nv") && el.localName.endsWith("Pr"));
+    const cNvPr = globalXmlParser.element(wrapper ?? child, "cNvPr");
+    return !!cNvPr && globalXmlParser.boolAttr(cNvPr, "hidden", false);
+}
 function parseGroupChild(child, parser, frame) {
     const kind = child.localName;
+    if (isHidden(child))
+        return null;
     if (kind == "wsp" ? !isDrawableShape(child, true) : kind != "grpSp" && kind != "pic")
         return notDrawn("group-child");
     const props = globalXmlParser.element(child, kind == "grpSp" ? "grpSpPr" : "spPr");
@@ -2064,8 +2082,12 @@ function parseGroupChild(child, parser, frame) {
     const mapped = placeChild(frame, [...xfrmPair(xfrm, "off", "x", "y"), ...xfrmPair(xfrm, "ext", "cx", "cy")], line, rotation);
     if (!mapped)
         return notDrawn("group-child");
-    if (kind == "pic")
-        return { ...parser.parsePicture(child), cssStyle: {}, rotation: 0, place: mapped.place };
+    if (kind == "pic") {
+        const flipH = frame.flipH != (!!xfrm && globalXmlParser.boolAttr(xfrm, "flipH", false));
+        const flipV = frame.flipV != (!!xfrm && globalXmlParser.boolAttr(xfrm, "flipV", false));
+        const cssStyle = flipH || flipV ? { transform: `scale(${flipH ? -1 : 1}, ${flipV ? -1 : 1})` } : {};
+        return { ...parser.parsePicture(child), cssStyle, rotation: 0, place: mapped.place };
+    }
     const result = kind == "grpSp" ? parseGroup(child, parser, mapped.width, mapped.height, frame.flipH, frame.flipV) : parseShape(child, parser);
     if (result instanceof DmlShape) {
         result.width = mapped.width;
@@ -2898,6 +2920,9 @@ class DocumentParser {
     parseDrawingWrapper(node) {
         var result = { type: DomType.Drawing, children: [], cssStyle: {} };
         var isAnchor = node.localName == "anchor";
+        const docPr = globalXmlParser.element(node, "docPr");
+        if (docPr && globalXmlParser.boolAttr(docPr, "hidden", false))
+            return null;
         let wrapType = null;
         let simplePos = globalXmlParser.boolAttr(node, "simplePos");
         globalXmlParser.boolAttr(node, "behindDoc");
@@ -3656,7 +3681,7 @@ function wrapPageFields(children) {
             const field = pageFieldResult(f.instruction, between);
             field && children.splice(f.separate + 1, between.length, field);
         }
-        else {
+        else if (between.length == 0) {
             const run = { ...f.run, fieldRun: false, children: [{ type: DomType.Text, text: f.savedText }] };
             const field = pageFieldResult(f.instruction, [run]);
             field && children.splice(f.end, 0, field);
@@ -3752,7 +3777,7 @@ function groupByParagraph(spans) {
             group = {
                 p,
                 spans: [],
-                stops: all.filter(t => t.style != "clear").sort((a, b) => a.pos - b.pos),
+                stops: all.filter(t => t.style != "clear" && t.style != "bar").sort((a, b) => a.pos - b.pos),
                 clears: all.filter(t => t.style == "clear").map(t => t.pos),
                 defaultTabSize: lengthToPoint(defaultTabSize) || 36,
             };
@@ -3895,6 +3920,27 @@ const verticalFrames = {
     topMargin: ["0pt", marginTop],
     bottomMargin: [`(${pageHeight} - ${marginBottom})`, marginBottom],
 };
+const vmlHorizontalFrames = new Map([
+    ["page", horizontalFrames.page], ["margin", textColumn], ["text", textColumn],
+    ["left-margin-area", horizontalFrames.leftMargin], ["inner-margin-area", horizontalFrames.leftMargin],
+    ["right-margin-area", horizontalFrames.rightMargin], ["outer-margin-area", horizontalFrames.rightMargin],
+]);
+const vmlVerticalFrames = new Map([
+    ["page", verticalFrames.page], ["margin", verticalFrames.margin],
+    ["top-margin-area", verticalFrames.topMargin], ["inner-margin-area", verticalFrames.topMargin],
+    ["bottom-margin-area", verticalFrames.bottomMargin], ["outer-margin-area", verticalFrames.bottomMargin],
+]);
+const vmlAlignShare = new Map([["left", 0], ["top", 0], ["inside", 0], ["center", 0.5], ["right", 1], ["bottom", 1], ["outside", 1]]);
+function vmlEdge(frames, relative, align, offset, size) {
+    const frame = frames.get(relative);
+    if (!frame)
+        return null;
+    const [start, length] = frame;
+    const share = vmlAlignShare.get(align);
+    return share == null || size == null
+        ? `calc(${start} + ${formatNumber(offset)}pt)`
+        : `calc(${start} + (${length} - ${formatNumber(size)}pt) * ${share})`;
+}
 const drawnHeads = new Set(["triangle", "arrow", "stealth"]);
 const headScale = { sm: 2, med: 3, lg: 5 };
 const hasOwn = (record, key) => key != null && Object.prototype.hasOwnProperty.call(record, key);
@@ -4159,11 +4205,11 @@ class HtmlRenderer {
                 props = sect.sectProps;
             }
             if (this.options.renderFootnotes) {
-                const notes = this.renderNotes(this.currentFootnoteIds, this.footnoteMap);
+                const notes = this.renderNotes(this.currentFootnoteIds, this.footnoteMap, "footnotes");
                 notes && pageElement.appendChild(notes);
             }
             if (this.options.renderEndnotes && i == l - 1) {
-                const notes = this.renderNotes(this.currentEndnoteIds, this.endnoteMap);
+                const notes = this.renderNotes(this.currentEndnoteIds, this.endnoteMap, "endnotes");
                 notes && pageElement.appendChild(notes);
             }
             this.options.renderFooters && this.renderHeaderFooter(props.footerRefs, props, result.length, prevProps != props, pageElement);
@@ -4245,7 +4291,7 @@ class HtmlRenderer {
                 const p = elem;
                 const s = this.findStyle(p.styleName);
                 if (p.pageBreakBefore || s?.paragraphProps?.pageBreakBefore) {
-                    current.sectProps = sectProps;
+                    current.sectProps = null;
                     current.pageBreak = true;
                     current = { sectProps: null, elements: [], pageBreak: false };
                     result.push(current);
@@ -4454,10 +4500,16 @@ section.${c}>footer { z-index: 1; }
                     console.warn(`Can't find linked style ${style.linked}`);
             }
             for (const subStyle of subStyles) {
+                var selector = `${style.target ?? ''}.${style.cssName}`;
                 const subTarget = style.target != subStyle.target ? ` ${subStyle.target}` : '';
-                var selector = `${style.target ?? ''}.${style.cssName}${subTarget}`;
-                if (defautStyles[style.target] == style)
-                    selector = `${subTarget ? `:where(.${this.className})` : `.${this.className}`} ${style.target}${subTarget}, ` + selector;
+                if (style.target == null)
+                    selector = `:where(${selector})`;
+                selector += subTarget;
+                if (defautStyles[style.target] == style) {
+                    const own = !subTarget || style.target == "p" ? `.${this.className} ${style.target}, ` : "";
+                    const sub = subTarget ? `:where(.${this.className}) ${style.target}${subTarget}, ` : "";
+                    selector = own + sub + selector;
+                }
                 if (subStyle.target == "span" && (style.target == null || style.target == "p")) {
                     const font = Object.fromEntries(Object.entries(subStyle.values).filter(([key]) => ["font-family", "font-size", "font-weight", "font-style"].includes(key)));
                     const parentSelector = selector.split(", ").map(s => s.replace(/ span$/, "")).join(", ");
@@ -4472,10 +4524,12 @@ section.${c}>footer { z-index: 1; }
             this.h({ tagName: "style", children: [styleText] })
         ];
     }
-    renderNotes(noteIds, notesMap) {
+    renderNotes(noteIds, notesMap, kind) {
         var notes = noteIds.map(id => notesMap[id]).filter(x => x);
         if (notes.length > 0) {
-            return this.h({ tagName: "ol", children: this.renderElements(notes) });
+            const list = this.h({ tagName: "ol", children: this.renderElements(notes) });
+            list.setAttribute("data-docx-notes", kind);
+            return list;
         }
     }
     renderElement(elem) {
@@ -4746,7 +4800,9 @@ section.${c}>footer { z-index: 1; }
     }
     renderFootnoteReference(elem) {
         this.currentFootnoteIds.push(elem.id);
-        return this.h({ tagName: "sup", children: [`${this.currentFootnoteIds.length}`] });
+        const ref = this.h({ tagName: "sup", children: [`${this.currentFootnoteIds.length}`] });
+        ref.setAttribute("data-docx-footnote", "");
+        return ref;
     }
     renderEndnoteReference(elem) {
         this.currentEndnoteIds.push(elem.id);
@@ -4877,7 +4933,8 @@ section.${c}>footer { z-index: 1; }
         return box;
     }
     renderShape(box, shape, fitted, textColor = null) {
-        box.style.setProperty("pointer-events", "none");
+        if (!shape.imageHref)
+            box.style.setProperty("pointer-events", "none");
         const svg = this.createSvgElement("svg");
         if (fitted) {
             for (const [key, value] of [["position", "absolute"], ["inset", "0"], ["width", "100%"], ["height", "100%"], ["overflow", "visible"]])
@@ -5035,7 +5092,7 @@ section.${c}>footer { z-index: 1; }
     placeShapeWrapper(anchor, autoFit, style, width, height) {
         const set = (key, value) => style.setProperty(key, value);
         const floating = !anchor.inline && !anchor.nested;
-        const placed = floating && anchor.wrap == "wrapNone";
+        const placed = floating && (anchor.wrap == "wrapNone" || hasOwn(verticalFrames, anchor.v.relative));
         set("display", floating && !placed ? "block" : "inline-block");
         set("position", placed ? "absolute" : "relative");
         set("width", pt(width));
@@ -5086,39 +5143,22 @@ section.${c}>footer { z-index: 1; }
             set("margin-left", box.hRelative == "page" ? `calc(${pt(box.x)} - var(--docx-margin-left, 0pt))` : pt(box.x));
             set("margin-top", pt(box.y));
         }
-        else if (box.placed) {
+        else if (box.position == "absolute") {
             set("position", "absolute");
-            switch (box.hRelative) {
-                case "page":
-                    set("left", pt(box.x));
-                    break;
-                case "margin":
-                case "text":
-                    set("left", `calc(var(--docx-margin-left, 0pt) + ${pt(box.x)})`);
-                    break;
-                default:
-                    set("margin-left", pt(box.x));
-                    break;
-            }
-            const top = box.vRelative == "page" ? pt(box.y)
-                : box.vRelative == "margin" ? `var(--docx-margin-top, 0pt) + ${pt(box.y)}` : null;
+            const left = vmlEdge(vmlHorizontalFrames, box.hRelative, box.hAlign, box.x, box.width);
+            const top = vmlEdge(vmlVerticalFrames, box.vRelative, box.vAlign, box.y, box.height);
+            if (left == null)
+                set("margin-left", pt(box.x));
+            else
+                set("left", left);
             if (top == null)
                 set("margin-top", pt(box.y));
             else if (this.currentPart instanceof FooterPart)
-                set("bottom", `calc(var(--docx-page-height, 100%) - ${top} - ${pt(box.height ?? 0)})`);
+                set("bottom", `calc(var(--docx-page-height, 100%) - (${top}) - ${pt(box.height ?? 0)})`);
             else
-                set("top", box.vRelative == "page" ? top : `calc(${top})`);
-        }
-        else if (box.position == "absolute" && box.width != null && (box.hAlign == "center" || box.hAlign == "right") && (box.hRelative == "page" || box.hRelative == "margin")) {
-            const from = box.hRelative == "page" ? "0pt" : "var(--docx-margin-left, 0pt)";
-            const span = box.hRelative == "page" ? "var(--docx-page-width, 0pt)"
-                : "(var(--docx-page-width, 0pt) - var(--docx-margin-left, 0pt) - var(--docx-margin-right, 0pt))";
-            set("position", "absolute");
-            set("left", `calc(${from} + ${span}${box.hAlign == "center" ? ` / 2 - ${pt(box.width / 2)}` : ` - ${pt(box.width)}`})`);
+                set("top", top);
         }
         else {
-            if (box.position == "absolute")
-                set("position", "absolute");
             if (box.x)
                 set("margin-left", pt(box.x));
             if (box.y)
@@ -5440,6 +5480,8 @@ function setFieldText(field, text) {
         n.data = first ? text : "";
         first = false;
     }
+    if (first)
+        (field.firstElementChild ?? field).appendChild(document.createTextNode(text));
     return field.textContent != before;
 }
 function splitPage(page, className = "docx") {
@@ -5457,14 +5499,35 @@ function splitPage(page, className = "docx") {
     const pageSpace = limitY - articles[0].getBoundingClientRect().top;
     if (pageSpace < MIN_SPLIT_HEIGHT)
         return null;
+    const footnotes = children.find(c => c.tagName === "OL" && c.dataset.docxNotes === "footnotes");
+    const items = footnotes ? Array.from(footnotes.children) : [];
+    const refs = footnotes ? articles.flatMap(a => Array.from(a.querySelectorAll("sup[data-docx-footnote]"))) : [];
+    let keptNotes = items.length;
+    let notesLimit = limitY;
+    if (items.length && refs.length) {
+        const chrome = outerHeight(footnotes) - (items[items.length - 1].getBoundingClientRect().bottom - items[0].getBoundingClientRect().top);
+        keptNotes = 0;
+        for (let k = Math.min(items.length, refs.length); k > 0; k--) {
+            const limit = limitY - chrome - (items[k - 1].getBoundingClientRect().bottom - items[0].getBoundingClientRect().top);
+            if (limit - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT && refs.filter(r => r.getBoundingClientRect().bottom <= limit).length >= k) {
+                keptNotes = k;
+                notesLimit = limit;
+                break;
+            }
+        }
+    }
+    else if (items.length && limitY - outerHeight(footnotes) - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT) {
+        notesLimit = limitY - outerHeight(footnotes);
+    }
     const flow = [
         ...articles.flatMap(article => Array.from(article.children).map(block => ({ block, article }))),
-        ...children.filter(c => c.tagName === "OL").map(block => ({ block, article: null })),
+        ...children.filter(c => c.tagName === "OL" && c !== footnotes).map(block => ({ block, article: null })),
     ];
     const last = flow[flow.length - 1].block;
     const end = (block) => block.getBoundingClientRect().bottom + (block === last ? parseFloat(getComputedStyle(block).marginBottom) || 0 : 0);
-    let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > limitY);
-    let splitLimit = limitY;
+    const bodyEnd = notesLimit;
+    let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > bodyEnd);
+    let splitLimit = bodyEnd;
     let keepNotes = false;
     if (over > 0 && !flow[over].article && flow[over - 1].article) {
         const bodyLimit = limitY - (end(last) - flow[over - 1].block.getBoundingClientRect().bottom);
@@ -5475,28 +5538,28 @@ function splitPage(page, className = "docx") {
             keepNotes = true;
         }
     }
-    if (over < 0) {
+    if (over < 0 && keptNotes == items.length) {
         hideBlankOverflow(flow, limitY);
         return null;
     }
-    const overArticle = flow[over].article;
-    let cut = over;
+    const overArticle = over < 0 ? null : flow[over].article;
+    let cut = over < 0 ? flow.length : over;
     let carry = null;
-    if (flow[over].block.tagName === "TABLE")
+    if (over >= 0 && flow[over].block.tagName === "TABLE")
         carry = splitTable(flow[over].block, splitLimit);
-    else if (flow[over].block.tagName === "P")
+    else if (over >= 0 && flow[over].block.tagName === "P")
         carry = splitParagraph(flow[over].block, splitLimit, className);
-    const stays = !carry && unbreakableHeight(flow[over].block) > pageSpace;
+    const stays = over >= 0 && !carry && unbreakableHeight(flow[over].block) > Math.max(pageSpace, pageSpace + headerFooterSaving(children));
     if (carry || stays) {
         cut = over + 1;
     }
-    else {
+    else if (over >= 0) {
         while (cut > 0 && flow[cut - 1].article === overArticle && overArticle && getComputedStyle(flow[cut - 1].block).breakAfter === "avoid")
             cut--;
         if (cut === 0)
             cut = over || 1;
     }
-    if (!carry && flow.slice(cut).every(f => f.article ? isBlank(f.block) : stays)) {
+    if (!carry && keptNotes == items.length && flow.slice(cut).every(f => f.article ? isBlank(f.block) : stays)) {
         hideBlankOverflow(flow, limitY);
         return null;
     }
@@ -5528,6 +5591,14 @@ function splitPage(page, className = "docx") {
             next.appendChild(rest);
         }
     }
+    if (keptNotes < items.length) {
+        const rest = keptNotes ? footnotes.cloneNode(false) : footnotes;
+        if (keptNotes) {
+            rest.setAttribute("start", String(Number(footnotes.getAttribute("start") ?? 1) + keptNotes));
+            rest.append(...items.slice(keptNotes));
+        }
+        next.appendChild(rest);
+    }
     next.append(...notes);
     for (const c of children) {
         if (c.tagName === "FOOTER" && c.dataset.docxHf !== "first")
@@ -5543,11 +5614,30 @@ function showHeaderFooter(page, number) {
         const pick = (page.hasAttribute("data-docx-first-page") ? find("first") : null)
             ?? (number % 2 == 0 ? find("even") : null)
             ?? find("default");
+        if (!pick)
+            continue;
         for (const c of alternates) {
             if ((c === pick) === (c.style.display === "none"))
                 c.style.display = c === pick ? "" : "none";
         }
     }
+}
+function headerFooterSaving(children) {
+    let saving = 0;
+    for (const tag of ["HEADER", "FOOTER"]) {
+        const shown = children.find(c => c.tagName === tag && getComputedStyle(c).display !== "none");
+        const next = children.filter(c => c.tagName === tag && c.dataset.docxHf !== "first");
+        saving += (shown ? outerHeight(shown) : 0) - (next.length ? Math.min(...next.map(shownHeight)) : 0);
+    }
+    return saving;
+}
+function shownHeight(el) {
+    if (el.style.display !== "none")
+        return outerHeight(el);
+    el.style.display = "";
+    const height = outerHeight(el);
+    el.style.display = "none";
+    return height;
 }
 function hideBlankOverflow(flow, limitY) {
     for (const f of flow) {

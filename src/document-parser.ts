@@ -870,6 +870,11 @@ export class DocumentParser {
 	parseDrawingWrapper(node: Element): OpenXmlElement {
 		var result = <OpenXmlElement>{ type: DomType.Drawing, children: [], cssStyle: {} };
 		var isAnchor = node.localName == "anchor";
+		const docPr = xml.element(node, "docPr");
+
+		// a drawing the author hid in Word's selection pane is not shown, whatever its wrapping
+		if (docPr && xml.boolAttr(docPr, "hidden", false))
+			return null;
 
 		//TODO
 		// result.style["margin-left"] = xml.sizeAttr(node, "distL", SizeType.Emu);
@@ -1823,7 +1828,8 @@ function wrapPageFields(children: OpenXmlElement[]) {
 		if (between.some(c => c.type == DomType.Run)) {
 			const field = pageFieldResult(f.instruction, between);
 			field && children.splice(f.separate + 1, between.length, field);
-		} else {
+		} else if (between.length == 0) {
+			// a result held in something else, such as a tracked change, keeps showing as it is
 			const run: WmlRun = { ...f.run, fieldRun: false, children: [<WmlText>{ type: DomType.Text, text: f.savedText }] };
 			const field = pageFieldResult(f.instruction, [run]);
 			field && children.splice(f.end, 0, field);

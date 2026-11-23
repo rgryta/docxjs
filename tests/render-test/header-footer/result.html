@@ -29,21 +29,21 @@ section.docx>footer { z-index: 1; }
   --docx-hlink-color: #0563C1;
   --docx-folHlink-color: #954F72;
 }
-</style><!--docxjs document styles--><style>.docx {
+</style><!--docxjs document styles--><style>:where(.docx) {
   font-family: 'Liberation Serif', NSimSun;
 }
-.docx span {
+:where(.docx) span {
   font-family: 'Liberation Serif', NSimSun;
 }
-.docx p {
+:where(.docx) p {
   hyphens: none;
 }
 .docx p, p.docx_normal {
 }
-:where(.docx) p, p.docx_normal {
+.docx p, :where(.docx) p, p.docx_normal {
   font-size: 12.00pt;
 }
-:where(.docx) p span, p.docx_normal span {
+.docx p, :where(.docx) p span, p.docx_normal span {
   min-height: 12.00pt;
   font-size: 12.00pt;
 }

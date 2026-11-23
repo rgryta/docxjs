@@ -42,11 +42,6 @@ export function mergeTabs(base: ParagraphTab[] | undefined, own: ParagraphTab[] 
 	return [...base.filter(b => !own.some(o => samePos(o, b))), ...own];
 }
 
-export function updateTabStop(elem: HTMLElement, tabs: ParagraphTab[], defaultTabSize: Length) {
-	registerTabStop(elem, tabs, defaultTabSize);
-	measureTabSpans([elem]);
-}
-
 export function cloneWithTabStops<T extends HTMLElement>(source: T): T {
 	const copy = source.cloneNode(true) as T;
 	const originals = source.querySelectorAll<HTMLElement>("span");
@@ -136,7 +131,8 @@ function groupByParagraph(spans: HTMLElement[]): TabGroup[] {
 			group = {
 				p,
 				spans: [],
-				stops: all.filter(t => t.style != "clear").sort((a, b) => a.pos - b.pos),
+				// a bar tab draws a line and is never a tab target
+				stops: all.filter(t => t.style != "clear" && t.style != "bar").sort((a, b) => a.pos - b.pos),
 				clears: all.filter(t => t.style == "clear").map(t => t.pos),
 				defaultTabSize: lengthToPoint(defaultTabSize) || 36,
 			};

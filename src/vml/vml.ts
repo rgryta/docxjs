@@ -19,8 +19,8 @@ export interface VmlSvgPart {
 
 export interface VmlBox {
 	position?: string;
-	placed: boolean;
 	hAlign?: string;
+	vAlign?: string;
 	hRelative?: string;
 	vRelative?: string;
 	x: number;
@@ -146,7 +146,7 @@ export function parseVmlElement(elem: Element, parser: DocumentParser, watermark
 			return notDrawn("group-child");
 
 		result.place = mapped.place;
-		result.box = { placed: false, x: 0, y: 0, width: mapped.width, height: mapped.height, hidden: result.box.hidden };
+		result.box = { x: 0, y: 0, width: mapped.width, height: mapped.height, hidden: result.box.hidden };
 	}
 
 	const imageId = imageData && xml.attr(imageData, "id");
@@ -335,8 +335,8 @@ const styleRules = new Map<string, RegExp>([
 	["visibility", /^(hidden|visible|inherit)$/],
 	["mso-position-horizontal", /^(absolute|left|center|right|inside|outside|top|bottom)$/],
 	["mso-position-vertical", /^(absolute|left|center|right|inside|outside|top|bottom)$/],
-	["mso-position-horizontal-relative", /^(page|margin|text|char)$/],
-	["mso-position-vertical-relative", /^(page|margin|text|line)$/],
+	["mso-position-horizontal-relative", /^(page|margin|text|char|(left|right|inner|outer)-margin-area)$/],
+	["mso-position-vertical-relative", /^(page|margin|text|line|(top|bottom|inner|outer)-margin-area)$/],
 	["v-text-anchor", /^(top|middle|bottom)(-center|-baseline|-center-baseline)?$/],
 ]);
 
@@ -383,8 +383,8 @@ function parseBox(style: Map<string, string>): VmlBox {
 
 	return {
 		position,
-		placed: position == "absolute" && (!hAlign || hAlign == "absolute"),
 		hAlign,
+		vAlign: style.get("mso-position-vertical"),
 		hRelative: style.get("mso-position-horizontal-relative"),
 		vRelative: style.get("mso-position-vertical-relative"),
 		x: lengthPoints(style.get("margin-left")) ?? lengthPoints(style.get("left")) ?? 0,
@@ -529,6 +529,7 @@ export interface VmlPaint {
 	stroke: string;
 	strokeWidth: number;
 	dash?: number[];
+	fillOpacity?: number;
 }
 
 function parsePaint(elem: Element, shapeType: VmlShapeType, stroke: Element, fill: Element): VmlPaint {
@@ -539,11 +540,23 @@ function parsePaint(elem: Element, shapeType: VmlShapeType, stroke: Element, fil
 	const dashStyle = stroke && xml.attr(stroke, "dashstyle")?.trim().toLowerCase();
 
 	return {
-		fill: filled ? vmlColor(xml.attr(elem, "fillcolor") ?? shapeType.fillcolor ?? "white") : null,
+		fill: filled ? vmlColor((fill && xml.attr(fill, "color")) ?? xml.attr(elem, "fillcolor") ?? shapeType.fillcolor ?? "white") : null,
+		fillOpacity: fill ? vmlFraction(xml.attr(fill, "opacity")) : undefined,
 		stroke: stroked ? vmlColor(strokeColor) : null,
 		strokeWidth: strokeWeight(weight),
 		dash: Object.prototype.hasOwnProperty.call(dashPatterns, dashStyle) ? dashPatterns[dashStyle] : undefined,
 	};
+}
+
+/** A VML fraction: "0.5", "50%" or 16.16 fixed point such as "32768f"; undefined when absent or not a number. */
+function vmlFraction(value: string): number {
+	const match = /^\s*(\d*\.?\d+)\s*(f|%)?\s*$/.exec(value ?? "");
+
+	if (!match)
+		return undefined;
+
+	const number = parseFloat(match[1]);
+	return clamp(match[2] == "f" ? number / 65536 : match[2] == "%" ? number / 100 : number, 0, 1);
 }
 
 function strokeWeight(value: string): number {
@@ -563,6 +576,9 @@ export function paintAttrs(paint: VmlPaint, filled: boolean, stroked: boolean): 
 		fill: (filled && paint.fill) || "none",
 		stroke: (stroked && paint.stroke) || "none",
 	};
+
+	if (result.fill != "none" && paint.fillOpacity < 1)
+		result["fill-opacity"] = formatNumber(paint.fillOpacity);
 
 	if (result.stroke != "none") {
 		result["stroke-width"] = `${formatNumber(paint.strokeWidth)}pt`;
