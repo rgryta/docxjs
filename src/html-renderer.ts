@@ -1422,6 +1422,9 @@ section.${c}>footer { z-index: 1; }
 		if (group.place)
 			this.placeInGroup(group.place, box.style);
 
+		if (group.rotation)
+			box.style.setProperty("transform", `rotate(${formatNumber(group.rotation)}deg)`);
+
 		this.renderElements(group.children, box);
 		return box;
 	}
