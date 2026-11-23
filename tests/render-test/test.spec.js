@@ -15,8 +15,14 @@ describe("Render document", function () {
     'page-break-before',
     'vml-path',
     'shapes',
-    'shape-groups'
+    'shape-groups',
+    'keep-with-next',
+    'page-break-rendered'
   ];
+
+  const testOptions = {
+    'page-break-rendered': { ignoreLastRenderedPageBreak: false }
+  };
 
   for (let path of tests) {
     it(`from ${path} should be correct`, async () => {
@@ -29,7 +35,8 @@ describe("Render document", function () {
       document.body.appendChild(div);
 
       await docx.renderAsync(docBlob, div, null, {
-        renderChanges: true
+        renderChanges: true,
+        ...testOptions[path]
       });
       
       const actual = formatHTML(div.innerHTML);
