@@ -405,6 +405,7 @@ interface VmlPaint {
 	stroke: string;
 	strokeWidth: number;
 	dash?: number[];
+	fillOpacity?: number;
 }
 
 function parsePaint(elem: Element, shapeType: VmlShapeType, stroke: Element, fill: Element): VmlPaint {
@@ -415,11 +416,23 @@ function parsePaint(elem: Element, shapeType: VmlShapeType, stroke: Element, fil
 	const dashStyle = stroke && xml.attr(stroke, "dashstyle")?.trim().toLowerCase();
 
 	return {
-		fill: filled ? vmlColor(xml.attr(elem, "fillcolor") ?? shapeType.fillcolor ?? "white") : null,
+		fill: filled ? vmlColor((fill && xml.attr(fill, "color")) ?? xml.attr(elem, "fillcolor") ?? shapeType.fillcolor ?? "white") : null,
+		fillOpacity: fill ? vmlFraction(xml.attr(fill, "opacity")) : undefined,
 		stroke: stroked ? vmlColor(strokeColor) : null,
 		strokeWidth: strokeWeight(weight),
 		dash: Object.prototype.hasOwnProperty.call(dashPatterns, dashStyle) ? dashPatterns[dashStyle] : undefined,
 	};
+}
+
+/** A VML fraction: "0.5", "50%" or 16.16 fixed point such as "32768f"; undefined when absent or not a number. */
+function vmlFraction(value: string): number {
+	const match = /^\s*(\d*\.?\d+)\s*(f|%)?\s*$/.exec(value ?? "");
+
+	if (!match)
+		return undefined;
+
+	const number = parseFloat(match[1]);
+	return clamp(match[2] == "f" ? number / 65536 : match[2] == "%" ? number / 100 : number, 0, 1);
 }
 
 function strokeWeight(value: string): number {
@@ -439,6 +452,9 @@ function paintAttrs(paint: VmlPaint, filled: boolean, stroked: boolean): Record<
 		fill: (filled && paint.fill) || "none",
 		stroke: (stroked && paint.stroke) || "none",
 	};
+
+	if (result.fill != "none" && paint.fillOpacity < 1)
+		result["fill-opacity"] = formatNumber(paint.fillOpacity);
 
 	if (result.stroke != "none") {
 		result["stroke-width"] = `${formatNumber(paint.strokeWidth)}pt`;
