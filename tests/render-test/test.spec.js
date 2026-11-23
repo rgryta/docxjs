@@ -12,7 +12,10 @@ describe("Render document", function () {
     'header-footer-even-odd-off',
     'footnote',
     'equation',
-    'page-break-before'
+    'page-break-before',
+    'vml-path',
+    'shapes',
+    'shape-groups'
   ];
 
   for (let path of tests) {

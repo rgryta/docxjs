@@ -90,3 +90,8 @@ export function asArray<T>(val: T | T[]): T[] {
 export function clamp(val, min, max) {
     return min > val ? min : (max < val ? max : val);
 }
+
+/** A whole number written as digits (with an optional minus), or NaN for anything else. */
+export function strictInteger(text: string): number {
+	return /^-?\d+$/.test(text?.trim() ?? "") ? parseInt(text) : NaN;
+}
