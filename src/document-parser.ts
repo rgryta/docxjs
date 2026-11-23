@@ -13,7 +13,8 @@ import { parseBookmarkEnd, parseBookmarkStart } from './document/bookmarks';
 import { IDomStyle, IDomSubStyle } from './document/style';
 import { WmlFieldChar, WmlFieldSimple, WmlInstructionText } from './document/fields';
 import { convertLength, LengthUsage, LengthUsageType } from './document/common';
-import { parseVmlElement } from './vml/vml';
+import { notDrawn, parseVmlElement, VmlShapeType } from './vml/vml';
+import { canDrawChoice, isDrawableShape, parseDrawingGroup, parseShape, parseShapeDrawing } from './drawing/shape';
 import { WmlComment, WmlCommentRangeEnd, WmlCommentRangeStart, WmlCommentReference } from './comments/elements';
 import { encloseFontFamily } from './utils';
 
@@ -23,8 +24,6 @@ export var autos = {
 	borderColor: "black",
 	highlight: "transparent"
 };
-
-const supportedNamespaceURIs = [];
 
 const mmlTagMap = {
 	"oMath": DomType.MmlMath,
@@ -61,6 +60,8 @@ export interface DocumentParserOptions {
 
 export class DocumentParser {
 	options: DocumentParserOptions;
+	vmlShapeTypes = new Map<string, VmlShapeType>();
+	drawingDepth = 0;
 
 	constructor(options?: Partial<DocumentParserOptions>) {
 		this.options = {
@@ -72,6 +73,7 @@ export class DocumentParser {
 
 	parseNotes(xmlDoc: Element, elemName: string, elemClass: any): any[] {
 		var result = [];
+		this.vmlShapeTypes.clear();
 
 		for (let el of xml.elements(xmlDoc, elemName)) {
 			const node = new elemClass();
@@ -86,6 +88,7 @@ export class DocumentParser {
 
 	parseComments(xmlDoc: Element): any[] {
 		var result = [];
+		this.vmlShapeTypes.clear();
 
 		for (let el of xml.elements(xmlDoc, "comment")) {
 			const item = new WmlComment();
@@ -104,6 +107,7 @@ export class DocumentParser {
 		var xbody = xml.element(xmlDoc, "body");
 		var background = xml.element(xmlDoc, "background");
 		var sectPr = xml.element(xbody, "sectPr");
+		this.vmlShapeTypes.clear();
 
 		return {
 			type: DomType.Document,
@@ -122,6 +126,23 @@ export class DocumentParser {
 		}
 
 		return result;
+	}
+
+	parseTextBoxContent(element: Element): OpenXmlElement[] {
+		return this.nested(() => this.parseBodyElements(element));
+	}
+
+	nested<T>(parse: () => T): T {
+		if (this.drawingDepth >= 16)
+			return null;
+
+		this.drawingDepth++;
+
+		try {
+			return parse();
+		} finally {
+			this.drawingDepth--;
+		}
 	}
 
 	parseBodyElements(element: Element): OpenXmlElement[] {
@@ -631,8 +652,8 @@ export class DocumentParser {
 	parseRun(node: Element, parent?: OpenXmlElement): WmlRun {
 		var result: WmlRun = <WmlRun>{ type: DomType.Run, parent: parent, children: [] };
 
-		for (let c of xml.elements(node)) {
-			c = this.checkAlternateContent(c);
+		for (const child of xml.elements(node)) {
+			const c = this.checkAlternateContent(child);
 
 			switch (c?.localName) {
 				case "t":
@@ -732,13 +753,16 @@ export class DocumentParser {
 					break;
 
 				case "pict":
-					result.children.push(this.parseVmlPicture(c));
+					result.children.push(this.parseVmlPicture(c, c === child));
 					break;
 
 				case "rPr":
 					this.parseRunProperties(c, result);
 					break;
 			}
+
+			if (c !== child && (!c || c.nextElementSibling))
+				result.children.push(notDrawn("alternate"));
 		}
 
 		return result;
@@ -801,11 +825,11 @@ export class DocumentParser {
 		});
 	}
 
-	parseVmlPicture(elem: Element): OpenXmlElement {
+	parseVmlPicture(elem: Element, watermarkAllowed = false): OpenXmlElement {
 		const result = { type: DomType.VmlPicture, children: [] };
 
 		for (const el of xml.elements(elem)) {
-			const child = parseVmlElement(el, this);
+			const child = parseVmlElement(el, this, watermarkAllowed);
 			child && result.children.push(child);
 		}
 
@@ -816,15 +840,10 @@ export class DocumentParser {
 		if (elem.localName != 'AlternateContent')
 			return elem;
 
-		var choice = xml.element(elem, "Choice");
+		const choice = xml.element(elem, "Choice");
 
-		if (choice) {
-			var requires = xml.attr(choice, "Requires");
-			var namespaceURI = elem.lookupNamespaceURI(requires);
-
-			if (supportedNamespaceURIs.includes(namespaceURI))
-				return choice.firstElementChild;
-		}
+		if (choice && canDrawChoice(choice))
+			return choice.firstElementChild;
 
 		return xml.element(elem, "Fallback")?.firstElementChild;
 	}
@@ -904,6 +923,9 @@ export class DocumentParser {
 			}
 		}
 
+		if (g?.type == DomType.Shape || g?.type == DomType.Group || (isAnchor && wrapType == "wrapNone" && g?.type == DomType.Image))
+			return parseShapeDrawing(node, g, this.drawingDepth > 0);
+
 		if (wrapType == "wrapTopAndBottom") {
 			result.cssStyle['display'] = 'block';
 
@@ -911,17 +933,6 @@ export class DocumentParser {
 				result.cssStyle['text-align'] = posX.align;
 				result.cssStyle['width'] = "100%";
 			}
-		}
-		else if (wrapType == "wrapNone") {
-			result.cssStyle['display'] = 'block';
-			result.cssStyle['position'] = 'relative';
-			result.cssStyle["width"] = "0px";
-			result.cssStyle["height"] = "0px";
-
-			if (posX.offset)
-				result.cssStyle["left"] = posX.offset;
-			if (posY.offset)
-				result.cssStyle["top"] = posY.offset;
 		}
 		else if (isAnchor && (posX.align == 'left' || posX.align == 'right')) {
 			result.cssStyle["float"] = posX.align;
@@ -933,14 +944,20 @@ export class DocumentParser {
 	parseGraphic(elem: Element): OpenXmlElement {
 		var graphicData = xml.element(elem, "graphicData");
 
-		for (let n of xml.elements(graphicData)) {
+		for (let n of graphicData ? xml.elements(graphicData) : []) {
 			switch (n.localName) {
 				case "pic":
 					return this.parsePicture(n);
+
+				case "wsp":
+					return isDrawableShape(n) ? parseShape(n, this) : notDrawn("graphic");
+
+				case "wgp":
+					return parseDrawingGroup(n, xml.element(elem.parentNode as Element, "extent"), this);
 			}
 		}
 
-		return null;
+		return notDrawn("graphic");
 	}
 
 	parsePicture(elem: Element): IDomImage {
