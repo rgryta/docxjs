@@ -699,11 +699,22 @@ section.${c}>footer { z-index: 1; }
 
 			for (const subStyle of subStyles) {
 				//TODO temporary disable modificators until test it well
+				var selector = `${style.target ?? ''}.${style.cssName}`; //${subStyle.mod ?? ''}
 				const subTarget = style.target != subStyle.target ? ` ${subStyle.target}` : '';
-				var selector = `${style.target ?? ''}.${style.cssName}${subTarget}`; //${subStyle.mod ?? ''} 
 
-				if (defautStyles[style.target] == style)
-					selector = `${subTarget ? `:where(.${this.className})` : `.${this.className}`} ${style.target}${subTarget}, ` + selector;
+				// document defaults have no target and sit below every style
+				if (style.target == null)
+					selector = `:where(${selector})`;
+
+				selector += subTarget;
+
+				// a default style's own values sit on its element; its run (or cell) values add no specificity, so any style beats them.
+				// Normal's run values also go on the paragraph, so its line box is sized from them.
+				if (defautStyles[style.target] == style) {
+					const own = !subTarget || style.target == "p" ? `.${this.className} ${style.target}, ` : "";
+					const sub = subTarget ? `:where(.${this.className}) ${style.target}${subTarget}, ` : "";
+					selector = own + sub + selector;
+				}
 
 				styleText += this.styleToString(selector, subStyle.values);
 			}
