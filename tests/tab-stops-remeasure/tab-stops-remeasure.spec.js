@@ -211,4 +211,16 @@ ${body.join("\n")}
     expectAt(centre(run(container, "Centre").getBoundingClientRect()), container, 234, "centre", 0.5);
     expectAt(run(container, "Right").getBoundingClientRect().right, container, 468, "right", 0.5);
   });
+
+  it("leaves tabs in a right-to-left paragraph unmeasured", async () => {
+    const container = await render([
+      paragraph(`<w:bidi/>${tabs(["right", 9360])}`, "a", "	", "Right"),
+    ]);
+    docx.remeasureTabStops(container);
+
+    tabSpans(container).forEach(s => {
+      expect(s.textContent).toBe(" ");
+      expect(s.getAttribute("style")).toBeNull();
+    });
+  });
 });
