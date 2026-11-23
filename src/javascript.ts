@@ -106,10 +106,9 @@ function reset(span: HTMLElement) {
 }
 
 function groupByParagraph(spans: HTMLElement[]): TabGroup[] {
-	const sorted = [...spans].sort((a, b) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
 	const groups = new Map<HTMLElement, TabGroup>();
 
-	for (const span of sorted) {
+	for (const span of spans) {
 		const p = span.closest("p");
 		let group = groups.get(p);
 
