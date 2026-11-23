@@ -47,7 +47,7 @@ function splitPages(pages: HTMLElement[], className: string, deadline: number): 
 		// Pages before i are final, so i is this page's final position.
 		[number] = pageNumber(pages[i], number);
 		showHeaderFooter(pages[i], number);
-		const next = splitPage(pages[i], className);
+		const next = splitPage(pages[i], className, number + 1);
 
 		if (next)
 			pages.splice(i + 1, 0, next);
@@ -170,7 +170,7 @@ function setFieldText(field: HTMLElement, text: string): boolean {
  * blocks of every article in order, then the notes lists. Returns the new page, or null when
  * the content fits or cannot be split.
  */
-export function splitPage(page: HTMLElement, className: string = "docx"): HTMLElement | null {
+export function splitPage(page: HTMLElement, className: string = "docx", nextNumber?: number): HTMLElement | null {
 	const children = Array.from(page.children) as HTMLElement[];
 	const articles = children.filter(c => c.tagName === "ARTICLE");
 
@@ -257,7 +257,7 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	else if (over >= 0 && flow[over].block.tagName === "P")
 		carry = splitParagraph(flow[over].block, splitLimit, className);
 
-	const stays = over >= 0 && !carry && unbreakableHeight(flow[over].block) > Math.max(pageSpace, pageSpace + headerFooterSaving(children));
+	const stays = over >= 0 && !carry && unbreakableHeight(flow[over].block) > Math.max(pageSpace, pageSpace + headerFooterSaving(children, nextNumber));
 
 	if (carry || stays) {
 		cut = over + 1;  // a block that cannot split and is taller than a page would overflow the next page too
@@ -353,13 +353,17 @@ function showHeaderFooter(page: HTMLElement, number: number) {
  * How much more room a page split off this one has: it shows the shortest alternate header and footer
  * other than the first-page ones, so a tall letterhead on the first page leaves more space on the next.
  */
-function headerFooterSaving(children: HTMLElement[]): number {
+function headerFooterSaving(children: HTMLElement[], nextNumber?: number): number {
 	let saving = 0;
 
 	for (const tag of ["HEADER", "FOOTER"]) {
 		const shown = children.find(c => c.tagName === tag && getComputedStyle(c).display !== "none");
 		const next = children.filter(c => c.tagName === tag && c.dataset.docxHf !== "first");
-		saving += (shown ? outerHeight(shown) : 0) - (next.length ? Math.min(...next.map(shownHeight)) : 0);
+		const find = (type: string) => next.find(c => c.dataset.docxHf === type);
+		// the alternate the next page shows, picked as showHeaderFooter does; without its number, the shortest
+		const pick = nextNumber == null ? null : (nextNumber % 2 == 0 ? find("even") : null) ?? find("default");
+		const height = pick ? shownHeight(pick) : next.length ? Math.min(...next.map(shownHeight)) : 0;
+		saving += (shown ? outerHeight(shown) : 0) - height;
 	}
 
 	return saving;
