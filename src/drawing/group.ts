@@ -33,6 +33,7 @@ export class DrawingGroup extends OpenXmlElementBase {
 	width: number;
 	height: number;
 	place?: GroupPlace;
+	rotation?: number;
 }
 
 export function groupFrame([ox, oy]: number[], [cw, ch]: number[], width: number, height: number, flipH: boolean, flipV: boolean): GroupFrame {
