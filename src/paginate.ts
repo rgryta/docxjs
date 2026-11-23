@@ -98,7 +98,8 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	const last = flow[flow.length - 1].block;
 	const end = (block: HTMLElement) => block.getBoundingClientRect().bottom + (block === last ? parseFloat(getComputedStyle(block).marginBottom) || 0 : 0);
 	const bodyEnd = notesLimit;
-	let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > bodyEnd);
+	// lists sit below the footnotes, so only the body gives up the footnotes' room
+	let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > (f.article ? bodyEnd : limitY));
 	let splitLimit = bodyEnd;
 	let keepNotes = false;
 
