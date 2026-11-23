@@ -76,6 +76,7 @@ describe("DrawingML shapes", function () {
     }))))),
     para("case-pic-none", run(anchor({ h: posH("page", offset(72)), v: posV("paragraph", offset(0)) }, picture))),
     para("case-pic-square", run(anchor({ h: posH("column", offset(72)), v: posV("paragraph", offset(0)), wrap: '<wp:wrapSquare wrapText="bothSides"/>' }, picture))),
+    para("case-square-page", run(anchor({ h: posH("page", offset(72)), v: posV("page", offset(200)), wrap: '<wp:wrapSquare wrapText="bothSides"/>' }, shapeGraphic(wsp())))),
     para("case-pic-behind", run(anchor({ h: posH("page", offset(72)), v: posV("paragraph", offset(0)), behind: 1 }, picture))),
     para("case-choice-empty", run(alternate('<mc:Choice Requires="wps"/>', ovalFallback))),
     para("case-choice-blank", run(alternate(rectChoice(""), ovalFallback))),
@@ -189,6 +190,13 @@ ${body}
   it("draws a line with no height flat", () => {
     const line = paragraph("case-flat-line").querySelector("svg line");
     expect(line.getAttribute("y2")).toBe(line.getAttribute("y1"));
+  });
+
+  it("places a square-wrapped shape anchored to the page on the page, out of the text flow", () => {
+    const box = shapeBox("case-square-page");
+    expect(getComputedStyle(box.parentElement).position).toBe("absolute");
+    expectNear(rect(box).top - rect(section()).top, 200 / 0.75);
+    expectNear(rect(box).left - rect(section()).left, 96);
   });
 
   it("offsets a paragraph-relative shape from the top of its line", () => {
