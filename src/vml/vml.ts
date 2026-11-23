@@ -227,6 +227,10 @@ export function parseVmlElement(elem: Element, parser: DocumentParser, watermark
 function parseVmlGroup(elem: Element, parser: DocumentParser, frame: GroupFrame): OpenXmlElement {
 	const style = parseVmlStyle(xml.attr(elem, "style"));
 	const box = parseBox(style);
+
+	if (frame && box.hidden)
+		return null;
+
 	const mapped = frame && placeChild(frame, groupRect(style), false, box.rotation ?? 0);
 	const width = frame ? mapped?.width : box.width;
 	const height = frame ? mapped?.height : box.height;
