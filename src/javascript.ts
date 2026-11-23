@@ -42,11 +42,6 @@ export function mergeTabs(base: ParagraphTab[] | undefined, own: ParagraphTab[] 
 	return [...base.filter(b => !own.some(o => samePos(o, b))), ...own];
 }
 
-export function updateTabStop(elem: HTMLElement, tabs: ParagraphTab[], defaultTabSize: Length) {
-	registerTabStop(elem, tabs, defaultTabSize);
-	measureTabSpans([elem]);
-}
-
 /** Measures the tab stops again, for example after fonts load or the zoom changes. Tabs in a cloned container are not registered and stay as they are. */
 export function remeasureTabStops(root: ParentNode, className: string = "docx"): void {
 	measureTabSpans(Array.from(root.querySelectorAll<HTMLElement>(`.${className}-tab-stop`)));
@@ -123,7 +118,8 @@ function groupByParagraph(spans: HTMLElement[]): TabGroup[] {
 			group = {
 				p,
 				spans: [],
-				stops: all.filter(t => t.style != "clear").sort((a, b) => a.pos - b.pos),
+				// a bar tab draws a line and is never a tab target
+				stops: all.filter(t => t.style != "clear" && t.style != "bar").sort((a, b) => a.pos - b.pos),
 				clears: all.filter(t => t.style == "clear").map(t => t.pos),
 				defaultTabSize: lengthToPoint(defaultTabSize) || 36,
 			};
