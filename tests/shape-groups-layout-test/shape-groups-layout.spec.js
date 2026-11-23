@@ -66,6 +66,7 @@ describe("Shape groups", function () {
       frame: xfrm({ x: 10 * PT, y: 10 * PT, w: 80 * PT, h: 0 }),
       spPr: `<a:ln w="${2 * PT}">${solid("FF0000")}<a:tailEnd type="triangle"/></a:ln>`,
     })))))),
+    para("case-vml-arrow", run(pict('<v:line from="0,0" to="100pt,0" strokeweight="2pt"><v:stroke endarrow="block"/></v:line>'))),
     para("case-hidden", run(inline(200, 100, groupGraphic(wgp(identity(200, 100),
       box("123456", 0, 0, 50, 50),
       box("654321", 100, 0, 50, 50).replace("<wps:wsp>", '<wps:wsp><wps:cNvPr id="7" name="h" hidden="1"/>'),
@@ -173,6 +174,12 @@ ${body}
     expectNear(rect(head).right, rect(box).right);
     expectNear(rect(line).right, rect(head).left);
     expect(reasons(paragraph("case-arrow"))).toEqual([]);
+  });
+
+  it("draws an arrowhead on a standalone VML line", () => {
+    const heads = paragraph("case-vml-arrow").querySelectorAll("svg path");
+    expect(heads.length).toBe(1);
+    expect(heads[0].getAttribute("fill")).toBe("black");
   });
 
   it("skips group children the author hid", () => {
