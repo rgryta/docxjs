@@ -1419,7 +1419,7 @@ section.${c}>footer { z-index: 1; }
 		const radius = pt(shape.radius * Math.min(width, height));
 		const parts: VmlSvgPart[] = [
 			shape.geometry == "ellipse" ? { tagName: "ellipse", attrs: { cx: "50%", cy: "50%", rx: "50%", ry: "50%", ...attrs(true) } }
-				: shape.geometry == "line" ? { tagName: "line", attrs: { x1: "0", y1: "0", x2: "100%", y2: "100%", ...attrs(false) } }
+				: shape.geometry == "line" ? { tagName: "line", attrs: { x1: "0", y1: "0", x2: width > 0 ? "100%" : "0", y2: height > 0 ? "100%" : "0", ...attrs(false) } }
 				: { tagName: "rect", attrs: { width: "100%", height: "100%", ...(shape.geometry == "roundRect" ? { rx: radius, ry: radius } : {}), ...attrs(true) } }
 		];
 
@@ -1452,6 +1452,7 @@ section.${c}>footer { z-index: 1; }
 		const floating = !anchor.inline && !anchor.nested;
 		const placed = floating && anchor.wrap == "wrapNone";
 
+		// text does not flow around square, tight or through wrapping: such a shape takes its own block
 		set("display", floating && !placed ? "block" : "inline-block");
 		set("position", placed ? "absolute" : "relative");
 		set("width", pt(width));
