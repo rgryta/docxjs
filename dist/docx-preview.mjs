@@ -103,6 +103,9 @@ function asArray(val) {
 function clamp(val, min, max) {
     return min > val ? min : (max < val ? max : val);
 }
+function strictInteger(text) {
+    return /^-?\d+$/.test(text?.trim() ?? "") ? parseInt(text) : NaN;
+}
 
 const ns$1 = {
     wordml: "http://schemas.openxmlformats.org/wordprocessingml/2006/main"};
@@ -113,11 +116,14 @@ const LengthUsage = {
     Border: { mul: 0.125, unit: "pt", min: 0.25, max: 12 },
     Point: { mul: 1, unit: "pt" },
     Percent: { mul: 0.02, unit: "%" }};
+const pointsPerUnit = { mm: 72 / 25.4, cm: 72 / 2.54, in: 72, pc: 12, pi: 12 };
+const universalMeasure = /^(-?(?:\d+\.?\d*|\.\d+))(mm|cm|in|pc|pi)$/;
 function convertLength(val, usage = LengthUsage.Dxa) {
     if (val == null || /.+(p[xt]|[%])$/.test(val)) {
         return val;
     }
-    var num = parseInt(val) * usage.mul;
+    const measure = usage.unit == "pt" ? universalMeasure.exec(val) : null;
+    var num = measure ? parseFloat(measure[1]) * pointsPerUnit[measure[2]] : parseInt(val) * usage.mul;
     if (usage.min && usage.max)
         num = clamp(num, usage.min, usage.max);
     return `${num.toFixed(2)}${usage.unit}`;
@@ -455,8 +461,14 @@ function parsePageNumber(elem, xml) {
         chapSep: xml.attr(elem, "chapSep"),
         chapStyle: xml.attr(elem, "chapStyle"),
         format: xml.attr(elem, "fmt"),
-        start: xml.intAttr(elem, "start")
+        start: parsePageStart(xml.attr(elem, "start"))
     };
+}
+function parsePageStart(value) {
+    if (value == null)
+        return null;
+    const start = Number(value);
+    return value.trim() && Number.isInteger(start) && start >= 0 ? start : 1;
 }
 function parseFooterHeaderReference(elem, xml) {
     return {
@@ -738,6 +750,7 @@ var DomType;
     DomType["SimpleField"] = "simpleField";
     DomType["ComplexField"] = "complexField";
     DomType["Instruction"] = "instruction";
+    DomType["FieldResult"] = "fieldResult";
     DomType["VmlPicture"] = "vmlPicture";
     DomType["MmlMath"] = "mmlMath";
     DomType["MmlMathParagraph"] = "mmlMathParagraph";
@@ -766,6 +779,8 @@ var DomType;
     DomType["MmlBar"] = "mmlBar";
     DomType["MmlGroupChar"] = "mmlGroupChar";
     DomType["VmlElement"] = "vmlElement";
+    DomType["Shape"] = "shape";
+    DomType["Group"] = "group";
     DomType["Inserted"] = "inserted";
     DomType["Deleted"] = "deleted";
     DomType["DeletedText"] = "deletedText";
@@ -802,6 +817,7 @@ class BaseHeaderFooterPart extends Part {
     }
     parseXml(root) {
         this.rootElement = this.createRootElement();
+        this._documentParser.vmlShapeTypes.clear();
         this.rootElement.children = this._documentParser.parseBodyElements(root);
     }
 }
@@ -903,6 +919,9 @@ class CorePropsPart extends Part {
 }
 
 class DmlTheme {
+    constructor() {
+        this.lineWidths = [];
+    }
 }
 function parseTheme(elem, xml) {
     var result = new DmlTheme();
@@ -914,6 +933,9 @@ function parseTheme(elem, xml) {
                 break;
             case "fontScheme":
                 result.fontScheme = parseFontScheme(el, xml);
+                break;
+            case "fmtScheme":
+                result.lineWidths = parseLineWidths(el, xml);
                 break;
         }
     }
@@ -935,6 +957,11 @@ function parseColorScheme(elem, xml) {
         }
     }
     return result;
+}
+function parseLineWidths(elem, xml) {
+    const list = xml.element(elem, "lnStyleLst");
+    const width = (ln) => xml.attr(ln, "w");
+    return list ? xml.elements(list, "ln").map(ln => /^\d{1,12}$/.test(width(ln) ?? "") ? parseInt(width(ln)) : null) : [];
 }
 function parseFontScheme(elem, xml) {
     var result = {
@@ -1021,7 +1048,7 @@ function parseSettings(elem, xml) {
                 result.endnoteProps = parseNoteProperties(el, xml);
                 break;
             case "autoHyphenation":
-                result.autoHyphenation = xml.boolAttr(el, "val");
+                result.autoHyphenation = xml.boolAttr(el, "val", true);
                 break;
             case "evenAndOddHeaders":
                 result.evenAndOddHeaders = xml.boolAttr(el, "val", true);
@@ -1265,93 +1292,893 @@ function parseBookmarkEnd(elem, xml) {
     };
 }
 
+const maxPercent = 1e6;
+const pxPerPt = 4 / 3;
+class DrawingGroup extends OpenXmlElementBase {
+    constructor() {
+        super(...arguments);
+        this.type = DomType.Group;
+    }
+}
+function groupFrame([ox, oy], [cw, ch], width, height, flipH, flipV) {
+    return [ox, oy, cw, ch, width, height].every(Number.isFinite) && cw > 0 && ch > 0 && width > 0 && height > 0
+        ? { ox, oy, cw, ch, width, height, flipH, flipV }
+        : null;
+}
+function placeChild(frame, [x, y, w, h], line, rotation) {
+    if (![x, y, w, h].every(Number.isFinite) || w < 0 || h < 0 || !(line ? w + h > 0 : w > 0 && h > 0))
+        return null;
+    const left = frame.flipH ? frame.cw - (x - frame.ox) - w : x - frame.ox;
+    const top = frame.flipV ? frame.ch - (y - frame.oy) - h : y - frame.oy;
+    const percents = [left / frame.cw, top / frame.ch, w / frame.cw, h / frame.ch].map(v => v * 100);
+    if (!percents.every(v => Math.abs(v) <= maxPercent))
+        return null;
+    const [l, t, pw, ph] = percents.map(v => `${v.toFixed(4)}%`);
+    return {
+        place: { left: l, top: t, width: pw, height: ph, rotation: frame.flipH != frame.flipV ? -rotation : rotation },
+        width: w / frame.cw * frame.width,
+        height: h / frame.ch * frame.height,
+    };
+}
+function integerPair(text, fallback) {
+    const parts = text.split(",");
+    return fallback.map((value, i) => {
+        const part = parts[i]?.trim();
+        return !part ? value : strictInteger(part);
+    });
+}
+function arrowBase(tip, from, strokeWidth, lengthScale) {
+    const [tx, ty] = tip.map(v => v * pxPerPt);
+    const [fx, fy] = from.map(v => v * pxPerPt);
+    const distance = Math.hypot(tx - fx, ty - fy) || 1;
+    const length = lengthScale * strokeWidth * pxPerPt;
+    return [tx - (tx - fx) / distance * length, ty - (ty - fy) / distance * length];
+}
+function arrowHead(tip, from, strokeWidth, widthScale, lengthScale) {
+    const [tx, ty] = tip.map(v => v * pxPerPt);
+    const [fx, fy] = from.map(v => v * pxPerPt);
+    const distance = Math.hypot(tx - fx, ty - fy) || 1;
+    const [ux, uy] = [(tx - fx) / distance, (ty - fy) / distance];
+    const half = widthScale * strokeWidth * pxPerPt / 2;
+    const [bx, by] = arrowBase(tip, from, strokeWidth, lengthScale);
+    const f = (v) => `${parseFloat(v.toFixed(2))}`;
+    return `M ${f(tx)} ${f(ty)} L ${f(bx - uy * half)} ${f(by + ux * half)} L ${f(bx + uy * half)} ${f(by - ux * half)} Z`;
+}
+
+const vmlNamespace = "urn:schemas-microsoft-com:vml";
+const modifierTags = new Set(["stroke", "fill", "path", "formulas", "f", "handles", "h", "shadow", "textbox",
+    "imagedata", "shapetype", "lock", "wrap", "anchorlock"]);
 class VmlElement extends OpenXmlElementBase {
     constructor() {
         super(...arguments);
         this.type = DomType.VmlElement;
-        this.attrs = {};
+        this.parts = [];
     }
 }
-function parseVmlElement(elem, parser) {
-    var result = new VmlElement();
+function parseVmlElement(elem, parser, watermarkAllowed = false, frame = null) {
+    if (elem.namespaceURI != vmlNamespace)
+        return null;
+    if (elem.localName == "shapetype") {
+        const id = globalXmlParser.attr(elem, "id");
+        id && parser.vmlShapeTypes.set(id, readShapeType(elem));
+        return null;
+    }
+    if (elem.localName == "group")
+        return parseVmlGroup(elem, parser, frame);
     switch (elem.localName) {
         case "rect":
-            result.tagName = "rect";
-            Object.assign(result.attrs, { width: '100%', height: '100%' });
-            break;
+        case "roundrect":
         case "oval":
-            result.tagName = "ellipse";
-            Object.assign(result.attrs, { cx: "50%", cy: "50%", rx: "50%", ry: "50%" });
-            break;
         case "line":
-            result.tagName = "line";
-            break;
         case "shape":
-            result.tagName = "g";
-            break;
-        case "textbox":
-            result.tagName = "foreignObject";
-            Object.assign(result.attrs, { width: '100%', height: '100%' });
             break;
         default:
-            return null;
+            return modifierTags.has(elem.localName) ? null : notDrawn("vml-element");
     }
-    for (const at of globalXmlParser.attrs(elem)) {
-        switch (at.localName) {
-            case "style":
-                result.cssStyleText = at.value;
-                break;
-            case "fillcolor":
-                result.attrs.fill = at.value;
-                break;
-            case "from":
-                const [x1, y1] = parsePoint(at.value);
-                Object.assign(result.attrs, { x1, y1 });
-                break;
-            case "to":
-                const [x2, y2] = parsePoint(at.value);
-                Object.assign(result.attrs, { x2, y2 });
-                break;
-        }
+    let shapeType = {};
+    const typeRef = elem.localName == "shape" ? globalXmlParser.attr(elem, "type") : null;
+    if (typeRef) {
+        shapeType = typeRef.startsWith("#") ? parser.vmlShapeTypes.get(typeRef.substring(1)) : undefined;
+        if (!shapeType && !globalXmlParser.elements(elem).some(el => el.localName == "imagedata"))
+            return notDrawn("vml-type");
+        shapeType ?? (shapeType = {});
     }
+    const result = new VmlElement();
+    let stroke = null, fill = null, textBox = null, imageData = null;
+    let hasTextPath = false;
+    const innerMarks = [];
     for (const el of globalXmlParser.elements(elem)) {
         switch (el.localName) {
             case "stroke":
-                Object.assign(result.attrs, parseStroke(el));
+                stroke = el;
                 break;
             case "fill":
-                Object.assign(result.attrs, parseFill());
+                fill = el;
+                break;
+            case "textbox":
+                textBox = el;
                 break;
             case "imagedata":
-                result.tagName = "image";
-                Object.assign(result.attrs, { width: '100%', height: '100%' });
-                result.imageHref = {
-                    id: globalXmlParser.attr(el, "id"),
-                    title: globalXmlParser.attr(el, "title"),
-                };
+                imageData = el;
                 break;
-            case "txbxContent":
-                result.children.push(...parser.parseBodyElements(el));
+            case "textpath":
+                hasTextPath = true;
+                break;
+            case "wrap":
+                result.wrapType = globalXmlParser.attr(el, "type");
                 break;
             default:
-                const child = parseVmlElement(el, parser);
-                child && result.children.push(child);
+                if (el.namespaceURI == vmlNamespace && !modifierTags.has(el.localName))
+                    innerMarks.push(markPart("vml-element"));
                 break;
         }
     }
+    if (hasTextPath)
+        return notDrawn(watermarkAllowed && elem.localName == "shape" ? "watermark" : "vml-element");
+    const style = parseVmlStyle(globalXmlParser.attr(elem, "style"));
+    result.box = parseBox(style);
+    if (frame) {
+        const line = elem.localName == "line";
+        const mapped = placeChild(frame, line ? lineRect(elem) : groupRect(style), line, result.box.rotation ?? 0);
+        if (!mapped)
+            return notDrawn("group-child");
+        result.place = mapped.place;
+        result.box = { x: 0, y: 0, width: mapped.width, height: mapped.height, hidden: result.box.hidden };
+    }
+    const imageId = imageData && globalXmlParser.attr(imageData, "id");
+    const paint = parsePaint$1(elem, shapeType, stroke, fill);
+    if (imageId) {
+        result.imageHref = { id: imageId, title: globalXmlParser.attr(imageData, "title") };
+        result.parts.push({ tagName: "image", attrs: { width: "100%", height: "100%", preserveAspectRatio: "none" } });
+    }
+    else {
+        switch (elem.localName) {
+            case "rect":
+                result.parts.push({ tagName: "rect", attrs: { width: "100%", height: "100%", ...paintAttrs(paint, true, true) } });
+                break;
+            case "roundrect": {
+                const radius = `${formatNumber(arcSize(globalXmlParser.attr(elem, "arcsize")) * Math.min(result.box.width ?? 0, result.box.height ?? 0))}pt`;
+                result.parts.push({ tagName: "rect", attrs: { width: "100%", height: "100%", rx: radius, ry: radius, ...paintAttrs(paint, true, true) } });
+                break;
+            }
+            case "oval":
+                result.parts.push({ tagName: "ellipse", attrs: { cx: "50%", cy: "50%", rx: "50%", ry: "50%", ...paintAttrs(paint, true, true) } });
+                break;
+            case "line": {
+                const line = parseLine(elem, frame ? { ...result.box } : result.box, paint);
+                result.parts.push(line, ...lineHeads(stroke, line.attrs, result.box, paint));
+                break;
+            }
+            case "shape": {
+                const pathText = globalXmlParser.attr(elem, "path") || shapeType.path;
+                const subpaths = pathText ? parseVmlPath(pathText) : null;
+                if (subpaths) {
+                    result.viewBox = parseViewBox(globalXmlParser.attr(elem, "coordsize") ?? shapeType.coordsize, globalXmlParser.attr(elem, "coordorigin") ?? shapeType.coordorigin);
+                    for (const subpath of subpaths) {
+                        result.parts.push({
+                            tagName: "path",
+                            attrs: { d: subpath.d, "vector-effect": "non-scaling-stroke", ...paintAttrs(paint, subpath.filled, subpath.stroked) }
+                        });
+                    }
+                }
+                else if (!textBox) {
+                    return notDrawn(pathText ? "vml-path" : "vml-shape");
+                }
+                else if (pathText) {
+                    innerMarks.push(markPart("vml-path"));
+                }
+                break;
+            }
+        }
+    }
+    if (elem.localName != "line" && arrowTypes(stroke).some(type => type != "none"))
+        innerMarks.push(markPart("partial"));
+    result.parts.push(...innerMarks);
+    const flip = style.get("flip") ?? "";
+    const flipX = flip.includes("x") != !!frame?.flipH;
+    const flipY = flip.includes("y") != !!frame?.flipV;
+    if (flipX || flipY)
+        result.flip = `scale(${flipX ? -1 : 1}, ${flipY ? -1 : 1})`;
+    if (textBox) {
+        result.textBox = parseTextBox(textBox, style.get("v-text-anchor"));
+        const content = globalXmlParser.element(textBox, "txbxContent");
+        const children = content ? parser.parseTextBoxContent(content) : [];
+        if (!children)
+            return notDrawn("depth");
+        result.children.push(...children);
+    }
     return result;
 }
-function parseStroke(el) {
+function parseVmlGroup(elem, parser, frame) {
+    const style = parseVmlStyle(globalXmlParser.attr(elem, "style"));
+    const box = parseBox(style);
+    const mapped = frame && placeChild(frame, groupRect(style), false, box.rotation ?? 0);
+    const width = frame ? mapped?.width : box.width;
+    const height = frame ? mapped?.height : box.height;
+    const flip = style.get("flip") ?? "";
+    const childFrame = groupFrame(integerPair(globalXmlParser.attr(elem, "coordorigin") ?? "", [0, 0]), integerPair(globalXmlParser.attr(elem, "coordsize") ?? "", [1000, 1000]), width, height, flip.includes("x") != !!frame?.flipH, flip.includes("y") != !!frame?.flipV);
+    if (!childFrame || frame && !mapped)
+        return notDrawn("group-child");
+    const children = parser.nested(() => globalXmlParser.elements(elem).map(child => parseVmlElement(child, parser, false, childFrame)).filter(Boolean));
+    if (!children)
+        return notDrawn("depth");
+    const group = new DrawingGroup();
+    group.width = width;
+    group.height = height;
+    group.children = children;
+    if (frame) {
+        group.place = mapped.place;
+        return group;
+    }
+    const result = new VmlElement();
+    const wrap = globalXmlParser.elements(elem).find(child => child.localName == "wrap");
+    result.box = box;
+    result.group = group;
+    result.wrapType = wrap ? globalXmlParser.attr(wrap, "type") : undefined;
+    return result;
+}
+function groupUnit(value, fallback = null) {
+    return value == null ? fallback : strictInteger(value);
+}
+function groupRect(style) {
+    return [groupUnit(style.get("left"), 0), groupUnit(style.get("top"), 0), groupUnit(style.get("width")), groupUnit(style.get("height"))];
+}
+function lineRect(elem) {
+    const [x1, y1] = integerPair(globalXmlParser.attr(elem, "from") ?? "", [0, 0]);
+    const [x2, y2] = integerPair(globalXmlParser.attr(elem, "to") ?? "", [0, 0]);
+    return [Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1)];
+}
+const drawnArrows = new Set(["block", "classic", "open"]);
+const arrowScale = { narrow: 2, short: 2, medium: 3, wide: 5, long: 5 };
+function arrowTypes(stroke) {
+    return ["startarrow", "endarrow"].map(name => (stroke && globalXmlParser.attr(stroke, name))?.trim().toLowerCase() ?? "none");
+}
+function lineHeads(stroke, line, box, paint) {
+    const corner = (x, y) => [x == "0" ? 0 : box.width, y == "0" ? 0 : box.height];
+    const ends = [corner(line.x1, line.y1), corner(line.x2, line.y2)];
+    return arrowTypes(stroke).flatMap((type, i) => {
+        if (type == "none" || !paint.stroke)
+            return [];
+        if (!drawnArrows.has(type))
+            return [markPart("partial")];
+        const scale = (name) => arrowScale[(globalXmlParser.attr(stroke, `${["start", "end"][i]}arrow${name}`) ?? "").trim().toLowerCase()] ?? 3;
+        const d = arrowHead(ends[i], ends[1 - i], paint.strokeWidth, scale("width"), scale("length"));
+        return [{ tagName: "path", attrs: { d, fill: paint.stroke, stroke: "none" } }];
+    });
+}
+function notDrawn(reason) {
+    const result = new VmlElement();
+    result.notDrawn = reason;
+    return result;
+}
+function markPart(reason) {
+    return { tagName: "g", attrs: { "data-docx-not-drawn": reason } };
+}
+function readShapeType(elem) {
+    const result = {};
+    for (const key of ["path", "coordsize", "coordorigin", "filled", "stroked", "fillcolor", "strokecolor"]) {
+        const value = globalXmlParser.attr(elem, key);
+        if (value)
+            result[key] = value;
+    }
+    return result;
+}
+const lengthPattern = /^[+-]?(\d+\.?\d*|\.\d+)(pt|px|in|cm|mm|pc|pi)?$/;
+const styleRules = new Map([
+    ["position", /^(absolute|relative|static)$/],
+    ["left", lengthPattern],
+    ["top", lengthPattern],
+    ["margin-left", lengthPattern],
+    ["margin-top", lengthPattern],
+    ["width", lengthPattern],
+    ["height", lengthPattern],
+    ["z-index", /^-?\d{1,10}$/],
+    ["rotation", /^-?\d+(\.\d+)?$/],
+    ["flip", /^(x|y|x y|y x)$/],
+    ["visibility", /^(hidden|visible|inherit)$/],
+    ["mso-position-horizontal", /^(absolute|left|center|right|inside|outside|top|bottom)$/],
+    ["mso-position-vertical", /^(absolute|left|center|right|inside|outside|top|bottom)$/],
+    ["mso-position-horizontal-relative", /^(page|margin|text|char|(left|right|inner|outer)-margin-area)$/],
+    ["mso-position-vertical-relative", /^(page|margin|text|line|(top|bottom|inner|outer)-margin-area)$/],
+    ["v-text-anchor", /^(top|middle|bottom)(-center|-baseline|-center-baseline)?$/],
+]);
+function parseVmlStyle(text) {
+    const result = new Map();
+    for (const item of (text ?? "").split(";")) {
+        const colon = item.indexOf(":");
+        if (colon > 0)
+            result.set(item.substring(0, colon).trim().toLowerCase(), item.substring(colon + 1).trim().toLowerCase());
+    }
+    for (const [key, value] of result) {
+        if (!styleRules.get(key)?.test(value))
+            result.delete(key);
+    }
+    return result;
+}
+function lengthPoints(value, unitlessAsPixels = false) {
+    const match = value == null ? null : lengthPattern.exec(value.trim().toLowerCase());
+    if (!match)
+        return null;
+    const number = value.trim().replace(/^\+/, "").replace(/[a-z]+$/i, "");
+    if (!match[2]) {
+        if (unitlessAsPixels)
+            return clamp(parseFloat(number) * 0.75, -1e4, 10000);
+        return parseFloat(number) == 0 ? 0 : null;
+    }
+    const css = convertLength(number + match[2], LengthUsage.Point);
+    return clamp(parseFloat(css) * (css.endsWith("px") ? 0.75 : 1), -1e4, 10000);
+}
+function parseBox(style) {
+    const position = style.get("position");
+    const hAlign = style.get("mso-position-horizontal");
+    const zIndex = style.get("z-index");
+    const rotation = style.get("rotation");
     return {
-        'stroke': globalXmlParser.attr(el, "color"),
-        'stroke-width': globalXmlParser.lengthAttr(el, "weight", LengthUsage.Emu) ?? '1px'
+        position,
+        hAlign,
+        vAlign: style.get("mso-position-vertical"),
+        hRelative: style.get("mso-position-horizontal-relative"),
+        vRelative: style.get("mso-position-vertical-relative"),
+        x: lengthPoints(style.get("margin-left")) ?? lengthPoints(style.get("left")) ?? 0,
+        y: lengthPoints(style.get("margin-top")) ?? lengthPoints(style.get("top")) ?? 0,
+        width: nonNegative(lengthPoints(style.get("width"))),
+        height: nonNegative(lengthPoints(style.get("height"))),
+        zIndex: zIndex ? parseInt(zIndex) : undefined,
+        rotation: rotation ? parseFloat(rotation) : undefined,
+        hidden: style.get("visibility") == "hidden",
     };
 }
-function parseFill(el) {
-    return {};
+function nonNegative(value) {
+    return value == null ? undefined : Math.max(0, value);
 }
-function parsePoint(val) {
-    return val.split(",");
+function parsePoint(value) {
+    const [x, y] = (value ?? "").split(",");
+    return [lengthPoints(x || "0", true) ?? 0, lengthPoints(y || "0", true) ?? 0];
+}
+function parseLine(elem, box, paint) {
+    const [x1, y1] = parsePoint(globalXmlParser.attr(elem, "from"));
+    const [x2, y2] = parsePoint(globalXmlParser.attr(elem, "to"));
+    box.x += Math.min(x1, x2);
+    box.y += Math.min(y1, y2);
+    box.width = Math.abs(x2 - x1);
+    box.height = Math.abs(y2 - y1);
+    return {
+        tagName: "line",
+        attrs: {
+            x1: x1 <= x2 ? "0" : "100%",
+            y1: y1 <= y2 ? "0" : "100%",
+            x2: x1 <= x2 ? "100%" : "0",
+            y2: y1 <= y2 ? "100%" : "0",
+            ...paintAttrs(paint, false, true)
+        }
+    };
+}
+function arcSize(value) {
+    const text = value?.trim() ?? "";
+    const fixed = /^(\d+)f$/.exec(text);
+    const percent = /^(\d+\.?\d*|\.\d+)%$/.exec(text);
+    const size = fixed ? parseInt(fixed[1]) / 65536
+        : percent ? parseFloat(percent[1]) / 100
+            : /^(\d+\.?\d*|\.\d+)$/.test(text) ? parseFloat(text) : 0.2;
+    return clamp(size, 0, 0.5);
+}
+function parseViewBox(coordsize, coordorigin) {
+    const integer = (part) => {
+        const value = strictInteger(part);
+        return Number.isNaN(value) ? null : value;
+    };
+    const size = (coordsize ?? "1000,1000").split(",").map(integer);
+    const origin = (coordorigin ?? "").split(",").map(integer);
+    return [origin[0] ?? 0, origin[1] ?? 0, size[0] > 0 ? size[0] : 1, size[1] > 0 ? size[1] : 1].join(" ");
+}
+const textAnchor$1 = { top: "flex-start", middle: "center", bottom: "flex-end" };
+const defaultInset = ["7.2pt", "3.6pt", "7.2pt", "3.6pt"];
+function parseTextBox(elem, anchor) {
+    const parts = (globalXmlParser.attr(elem, "inset") ?? "").split(",");
+    const [left, top, right, bottom] = defaultInset.map((fallback, i) => {
+        const value = lengthPoints(parts[i]);
+        return value == null ? fallback : `${formatNumber(Math.max(0, value))}pt`;
+    });
+    return {
+        padding: [top, right, bottom, left],
+        justify: textAnchor$1[anchor?.split("-")[0]] ?? "flex-start",
+    };
+}
+const trueValues = new Set(["t", "true", "1", "yes", "on"]);
+const falseValues = new Set(["f", "false", "0", "no", "off"]);
+function vmlBool(value, defaultValue) {
+    const key = value?.trim().toLowerCase();
+    return trueValues.has(key) ? true : falseValues.has(key) ? false : defaultValue;
+}
+const namedColors = new Set(("aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet " +
+    "brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan " +
+    "darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred " +
+    "darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue " +
+    "dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray " +
+    "green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen " +
+    "lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink " +
+    "lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen " +
+    "linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue " +
+    "mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy " +
+    "oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip " +
+    "peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown " +
+    "seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal " +
+    "thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen").split(" "));
+const systemColors = new Map([["window", "white"], ["windowtext", "black"]]);
+function vmlColor(value) {
+    const color = value?.replace(/\s*\[\d+\]\s*$/, "").trim().toLowerCase();
+    if (!color)
+        return null;
+    if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/.test(color) || namedColors.has(color))
+        return color;
+    if (systemColors.has(color))
+        return systemColors.get(color);
+    const rgb = /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/.exec(color);
+    if (rgb && rgb.slice(1).every(c => parseInt(c) <= 255))
+        return `rgb(${rgb.slice(1).map(c => parseInt(c)).join(", ")})`;
+    return null;
+}
+const dashPatterns = {
+    dash: [4, 3],
+    shortdash: [3, 1],
+    dot: [1, 3],
+    shortdot: [1, 1],
+    dashdot: [4, 3, 1, 3],
+    longdash: [8, 3],
+    longdashdot: [8, 3, 1, 3],
+    shortdashdot: [3, 1, 1, 1],
+    shortdashdotdot: [3, 1, 1, 1, 1, 1],
+    longdashdotdot: [8, 3, 1, 3, 1, 3],
+};
+function parsePaint$1(elem, shapeType, stroke, fill) {
+    const filled = vmlBool(globalXmlParser.attr(elem, "filled") ?? shapeType.filled, true) && vmlBool(fill && globalXmlParser.attr(fill, "on"), true);
+    const stroked = vmlBool(globalXmlParser.attr(elem, "stroked") ?? shapeType.stroked, true) && vmlBool(stroke && globalXmlParser.attr(stroke, "on"), true);
+    const strokeColor = (stroke && globalXmlParser.attr(stroke, "color")) ?? globalXmlParser.attr(elem, "strokecolor") ?? shapeType.strokecolor ?? "black";
+    const weight = (stroke && globalXmlParser.attr(stroke, "weight")) ?? globalXmlParser.attr(elem, "strokeweight");
+    const dashStyle = stroke && globalXmlParser.attr(stroke, "dashstyle")?.trim().toLowerCase();
+    return {
+        fill: filled ? vmlColor((fill && globalXmlParser.attr(fill, "color")) ?? globalXmlParser.attr(elem, "fillcolor") ?? shapeType.fillcolor ?? "white") : null,
+        fillOpacity: fill ? vmlFraction(globalXmlParser.attr(fill, "opacity")) : undefined,
+        stroke: stroked ? vmlColor(strokeColor) : null,
+        strokeWidth: strokeWeight(weight),
+        dash: Object.prototype.hasOwnProperty.call(dashPatterns, dashStyle) ? dashPatterns[dashStyle] : undefined,
+    };
+}
+function vmlFraction(value) {
+    const match = /^\s*(\d*\.?\d+)\s*(f|%)?\s*$/.exec(value ?? "");
+    if (!match)
+        return undefined;
+    const number = parseFloat(match[1]);
+    return clamp(match[2] == "f" ? number / 65536 : match[2] == "%" ? number / 100 : number, 0, 1);
+}
+function strokeWeight(value) {
+    const text = value?.trim().toLowerCase();
+    if (!text || !lengthPattern.test(text))
+        return 0.75;
+    const css = /[a-z]$/.test(text) ? convertLength(text.replace(/^\+/, ""), LengthUsage.Point) : convertLength(text, LengthUsage.Emu);
+    const points = parseFloat(css) * (css.endsWith("px") ? 0.75 : 1);
+    return clamp(isNaN(points) ? 0.75 : points, 0.25, 12);
+}
+function paintAttrs(paint, filled, stroked) {
+    const result = {
+        fill: (filled && paint.fill) || "none",
+        stroke: (stroked && paint.stroke) || "none",
+    };
+    if (result.fill != "none" && paint.fillOpacity < 1)
+        result["fill-opacity"] = formatNumber(paint.fillOpacity);
+    if (result.stroke != "none") {
+        result["stroke-width"] = `${formatNumber(paint.strokeWidth)}pt`;
+        if (paint.dash)
+            result["stroke-dasharray"] = paint.dash.map(k => `${formatNumber(k * paint.strokeWidth)}pt`).join(" ");
+    }
+    return result;
+}
+function formatNumber(value) {
+    return `${parseFloat(value.toFixed(2))}`;
+}
+const pathCommands = ["nf", "ns", "m", "l", "c", "x", "e", "r", "t", "v"];
+const pathGroupSize = { m: 2, l: 2, r: 2, t: 2, c: 6, v: 6 };
+const svgCommands = {
+    m: ["M", "L"], t: ["m", "l"], l: ["L", "L"], r: ["l", "l"], c: ["C", "C"], v: ["c", "c"]
+};
+const maxPathTokens = 10000;
+const maxPathValue = 2 ** 31;
+function parseVmlPath(text) {
+    const segments = [];
+    const token = /(-?\d+)|(,)|(\s+)/y;
+    let tokens = 0;
+    let afterComma = false;
+    let started = false;
+    const endSegment = () => {
+        const last = segments[segments.length - 1];
+        if (last && afterComma)
+            last.values.push(0);
+        afterComma = false;
+        started = false;
+    };
+    for (let i = 0; i < text.length;) {
+        if (++tokens > maxPathTokens)
+            return null;
+        const command = pathCommands.find(c => text.startsWith(c, i));
+        if (command) {
+            endSegment();
+            segments.push({ command, values: [] });
+            i += command.length;
+            continue;
+        }
+        token.lastIndex = i;
+        const match = token.exec(text);
+        if (!match || !segments.length && !match[3])
+            return null;
+        i = token.lastIndex;
+        const values = segments[segments.length - 1]?.values;
+        if (match[1]) {
+            const value = parseInt(match[1]);
+            if (Math.abs(value) > maxPathValue)
+                return null;
+            values.push(value);
+            afterComma = false;
+            started = true;
+        }
+        else if (match[2]) {
+            if (!started || afterComma)
+                values.push(0);
+            afterComma = true;
+            started = true;
+        }
+        else {
+            tokens--;
+        }
+    }
+    endSegment();
+    const subpaths = [];
+    let current = null;
+    const start = () => {
+        current = { d: [], filled: true, stroked: true, drawn: 0 };
+        subpaths.push(current);
+        return current;
+    };
+    for (const { command, values } of segments) {
+        const size = pathGroupSize[command];
+        if (!size) {
+            if (values.length)
+                return null;
+            if (command == "nf")
+                (current ?? start()).filled = false;
+            else if (command == "ns")
+                (current ?? start()).stroked = false;
+            else if (command == "x" && current?.d.length)
+                current.d.push("Z");
+            continue;
+        }
+        if (!values.length || values.length % size)
+            return null;
+        if (command == "m") {
+            if (!current || current.drawn)
+                start();
+            else
+                current.d = [];
+        }
+        else if (!current) {
+            start();
+        }
+        const move = command == "m" || command == "t";
+        if (!current.d.length && !move)
+            current.d.push("M 0 0");
+        const [first, rest] = svgCommands[command];
+        for (let k = 0; k < values.length; k += size) {
+            current.d.push(`${k ? rest : first} ${values.slice(k, k + size).join(" ")}`);
+            if (k || !move)
+                current.drawn++;
+        }
+    }
+    const drawn = subpaths.filter(s => s.drawn);
+    return drawn.length ? drawn.map(s => ({ d: s.d.join(" "), filled: s.filled, stroked: s.stroked })) : null;
+}
+
+const shapeNamespace = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
+const groupNamespace = "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup";
+const drawnPresets = new Set(["rect", "roundRect", "ellipse", "line"]);
+const groupProps = new Set(["cNvPr", "cNvGrpSpPr", "nvGrpSpPr", "grpSpPr", "extLst"]);
+const maxDepth = 16;
+const maxEmu = 1e12;
+class DmlShape extends OpenXmlElementBase {
+    constructor() {
+        super(...arguments);
+        this.type = DomType.Shape;
+    }
+}
+function integer(text) {
+    const value = strictInteger(text);
+    return Math.abs(value) <= maxEmu ? value : null;
+}
+function emuPoints(text) {
+    const value = integer(text);
+    return value == null ? null : value / 12700;
+}
+const descendant = (root, localName) => Array.from(root.getElementsByTagNameNS("*", localName));
+function isDrawableShape(wsp, inGroup = false) {
+    const spPr = globalXmlParser.element(wsp, "spPr");
+    const prst = spPr && globalXmlParser.elementAttr(spPr, "prstGeom", "prst");
+    const bodyPr = globalXmlParser.element(wsp, "bodyPr");
+    const warp = bodyPr && globalXmlParser.element(bodyPr, "prstTxWarp");
+    return (drawnPresets.has(prst) || inGroup && prst == "straightConnector1")
+        && !globalXmlParser.element(spPr, "custGeom")
+        && ["gradFill", "pattFill", "blipFill"].every(name => !descendant(spPr, name).length)
+        && !globalXmlParser.element(wsp, "linkedTxbx")
+        && (!bodyPr || (globalXmlParser.attr(bodyPr, "vert") ?? "horz") == "horz" && !globalXmlParser.boolAttr(bodyPr, "fromWordArt", false))
+        && (!warp || globalXmlParser.attr(warp, "prst") == "textNoShape")
+        && (prst != "line" || inGroup || ["headEnd", "tailEnd"].every(name => descendant(spPr, name).every(end => (globalXmlParser.attr(end, "type") ?? "none") == "none")));
+}
+function canDrawChoice(choice) {
+    const requires = globalXmlParser.attr(choice, "Requires");
+    const children = globalXmlParser.elements(choice);
+    return !!requires
+        && requires.split(" ").every(prefix => prefix && [shapeNamespace, groupNamespace].includes(choice.lookupNamespaceURI(prefix)))
+        && children.length == 1
+        && children.every(child => child.localName == "drawing" && drawsShapes(child));
+}
+function drawsShapes(drawing) {
+    const wrapper = globalXmlParser.elements(drawing).find(n => n.localName == "inline" || n.localName == "anchor");
+    const graphic = wrapper && globalXmlParser.element(wrapper, "graphic");
+    const graphicData = graphic && globalXmlParser.element(graphic, "graphicData");
+    const shapes = graphicData ? globalXmlParser.elements(graphicData) : [];
+    return shapes.length > 0 && shapes.every(s => s.namespaceURI == shapeNamespace && s.localName == "wsp" && isDrawableShape(s)
+        || s.namespaceURI == groupNamespace && s.localName == "wgp" && drawsGroup(s, 1));
+}
+function drawsGroup(group, depth) {
+    return depth <= maxDepth && globalXmlParser.elements(group).every(child => groupProps.has(child.localName)
+        || child.localName == "wsp" && isDrawableShape(child, true)
+        || child.localName == "pic"
+        || child.localName == "grpSp" && drawsGroup(child, depth + 1));
+}
+function parseShape(wsp, parser) {
+    const spPr = globalXmlParser.element(wsp, "spPr");
+    const geometry = globalXmlParser.element(spPr, "prstGeom");
+    const xfrm = globalXmlParser.element(spPr, "xfrm");
+    const ext = xfrm && globalXmlParser.element(xfrm, "ext");
+    const ln = globalXmlParser.element(spPr, "ln");
+    const style = globalXmlParser.element(wsp, "style");
+    const bodyPr = globalXmlParser.element(wsp, "bodyPr");
+    const txbx = globalXmlParser.element(wsp, "txbx");
+    const content = txbx && globalXmlParser.element(txbx, "txbxContent");
+    const result = new DmlShape();
+    result.geometry = globalXmlParser.attr(geometry, "prst") == "straightConnector1" ? "line" : globalXmlParser.attr(geometry, "prst");
+    result.radius = adjustment(geometry);
+    result.width = ext ? emuPoints(globalXmlParser.attr(ext, "cx")) : null;
+    result.height = ext ? emuPoints(globalXmlParser.attr(ext, "cy")) : null;
+    result.rotation = ((xfrm && integer(globalXmlParser.attr(xfrm, "rot"))) ?? 0) % 21600000 / 60000;
+    result.flipH = !!xfrm && globalXmlParser.boolAttr(xfrm, "flipH", false);
+    result.flipV = !!xfrm && globalXmlParser.boolAttr(xfrm, "flipV", false);
+    result.fill = parsePaint(spPr);
+    result.line = { width: ln ? emuPoints(globalXmlParser.attr(ln, "w")) : null, fill: parsePaint(ln), dash: ln && globalXmlParser.elementAttr(ln, "prstDash", "val") };
+    result.fillRef = parseStyleRef(style, "fillRef");
+    result.lnRef = parseStyleRef(style, "lnRef");
+    result.fontRef = parseStyleRef(style, "fontRef");
+    result.autoFit = !!bodyPr && !!globalXmlParser.element(bodyPr, "spAutoFit");
+    result.headEnd = parseLineEnd(ln, "headEnd");
+    result.tailEnd = parseLineEnd(ln, "tailEnd");
+    if (content) {
+        const children = parser.parseTextBoxContent(content);
+        if (!children)
+            return notDrawn("depth");
+        result.children = children;
+        result.textBox = parseBodyProps(bodyPr);
+    }
+    return result;
+}
+function parseLineEnd(ln, name) {
+    const end = ln && globalXmlParser.element(ln, name);
+    return end ? { type: globalXmlParser.attr(end, "type") ?? "none", width: globalXmlParser.attr(end, "w"), length: globalXmlParser.attr(end, "len") } : null;
+}
+function adjustment(geometry) {
+    const list = globalXmlParser.element(geometry, "avLst");
+    const guide = list && globalXmlParser.elements(list, "gd").find(gd => globalXmlParser.attr(gd, "name") == "adj");
+    const match = /^val (-?\d+)$/.exec((guide && globalXmlParser.attr(guide, "fmla")) ?? "");
+    return clamp(match ? parseInt(match[1]) : 16667, 0, 50000) / 100000;
+}
+const textAnchor = new Map([["t", "flex-start"], ["ctr", "center"], ["b", "flex-end"]]);
+function parseBodyProps(bodyPr) {
+    const inset = (name, fallback) => `${formatNumber(Math.max(0, (bodyPr && integer(globalXmlParser.attr(bodyPr, name))) ?? fallback) / 12700)}pt`;
+    return {
+        padding: [inset("tIns", 45720), inset("rIns", 91440), inset("bIns", 45720), inset("lIns", 91440)],
+        justify: textAnchor.get(bodyPr && globalXmlParser.attr(bodyPr, "anchor")) ?? "flex-start",
+    };
+}
+const colorAttrs = {
+    srgbClr: ["val"], schemeClr: ["val"], sysClr: ["lastClr"], prstClr: ["val"], scrgbClr: ["r", "g", "b"], hslClr: ["hue", "sat", "lum"],
+};
+function parseColor(parent) {
+    const el = globalXmlParser.elements(parent).find(e => Object.prototype.hasOwnProperty.call(colorAttrs, e.localName));
+    return el ? {
+        kind: el.localName,
+        values: colorAttrs[el.localName].map(name => globalXmlParser.attr(el, name)),
+        mods: globalXmlParser.elements(el).map(mod => [mod.localName, globalXmlParser.attr(mod, "val")]),
+    } : null;
+}
+function parsePaint(parent) {
+    if (!parent || globalXmlParser.element(parent, "noFill"))
+        return parent ? null : undefined;
+    const solid = globalXmlParser.element(parent, "solidFill");
+    return solid ? parseColor(solid) ?? { kind: "", values: [], mods: [] } : undefined;
+}
+function parseStyleRef(style, name) {
+    const ref = style && globalXmlParser.element(style, name);
+    return ref ? { idx: integer(globalXmlParser.attr(ref, "idx")), color: parseColor(ref) } : null;
+}
+function parseShapeDrawing(node, shape, nested) {
+    const docPr = globalXmlParser.element(node, "docPr");
+    if (docPr && globalXmlParser.boolAttr(docPr, "hidden", false))
+        return null;
+    const extent = globalXmlParser.element(node, "extent");
+    const simplePos = globalXmlParser.boolAttr(node, "simplePos", false) && globalXmlParser.element(node, "simplePos");
+    const axis = (name) => {
+        const el = globalXmlParser.element(node, name);
+        const align = el && globalXmlParser.element(el, "align");
+        const offset = el && globalXmlParser.element(el, "posOffset");
+        return el ? { relative: globalXmlParser.attr(el, "relativeFrom"), align: align?.textContent.trim(), offset: offset ? emuPoints(offset.textContent) : undefined } : {};
+    };
+    return {
+        type: DomType.Drawing,
+        children: [shape],
+        anchor: {
+            inline: node.localName == "inline",
+            nested,
+            wrap: globalXmlParser.elements(node).find(n => n.localName.startsWith("wrap"))?.localName,
+            behindDoc: globalXmlParser.boolAttr(node, "behindDoc", false),
+            width: extent ? emuPoints(globalXmlParser.attr(extent, "cx")) : null,
+            height: extent ? emuPoints(globalXmlParser.attr(extent, "cy")) : null,
+            h: simplePos ? { relative: "page", offset: emuPoints(globalXmlParser.attr(simplePos, "x")) } : axis("positionH"),
+            v: simplePos ? { relative: "page", offset: emuPoints(globalXmlParser.attr(simplePos, "y")) } : axis("positionV"),
+        }
+    };
+}
+function parseDrawingGroup(wgp, extent, parser) {
+    const result = parseGroup(wgp, parser, extent ? emuPoints(globalXmlParser.attr(extent, "cx")) : null, extent ? emuPoints(globalXmlParser.attr(extent, "cy")) : null, false, false);
+    if (result instanceof DrawingGroup) {
+        const props = globalXmlParser.element(wgp, "grpSpPr");
+        const xfrm = props && globalXmlParser.element(props, "xfrm");
+        result.rotation = ((xfrm && integer(globalXmlParser.attr(xfrm, "rot"))) ?? 0) % 21600000 / 60000;
+    }
+    return result;
+}
+function xfrmPair(xfrm, name, a, b) {
+    const el = xfrm && globalXmlParser.element(xfrm, name);
+    return el ? [integer(globalXmlParser.attr(el, a)), integer(globalXmlParser.attr(el, b))] : [null, null];
+}
+function parseGroup(group, parser, width, height, flipH, flipV) {
+    const props = globalXmlParser.element(group, "grpSpPr");
+    const xfrm = props && globalXmlParser.element(props, "xfrm");
+    const frame = groupFrame(xfrmPair(xfrm, "chOff", "x", "y"), xfrmPair(xfrm, "chExt", "cx", "cy"), width, height, flipH != (!!xfrm && globalXmlParser.boolAttr(xfrm, "flipH", false)), flipV != (!!xfrm && globalXmlParser.boolAttr(xfrm, "flipV", false)));
+    if (!frame)
+        return notDrawn("group-child");
+    const children = parser.nested(() => globalXmlParser.elements(group)
+        .filter(child => !groupProps.has(child.localName))
+        .map(child => parseGroupChild(child, parser, frame))
+        .filter(child => child != null));
+    if (!children)
+        return notDrawn("depth");
+    const result = new DrawingGroup();
+    result.width = width;
+    result.height = height;
+    result.children = children;
+    return result;
+}
+function isHidden(child) {
+    const wrapper = globalXmlParser.elements(child).find(el => el.localName.startsWith("nv") && el.localName.endsWith("Pr"));
+    const cNvPr = globalXmlParser.element(wrapper ?? child, "cNvPr");
+    return !!cNvPr && globalXmlParser.boolAttr(cNvPr, "hidden", false);
+}
+function parseGroupChild(child, parser, frame) {
+    const kind = child.localName;
+    if (isHidden(child))
+        return null;
+    if (kind == "wsp" ? !isDrawableShape(child, true) : kind != "grpSp" && kind != "pic")
+        return notDrawn("group-child");
+    const props = globalXmlParser.element(child, kind == "grpSp" ? "grpSpPr" : "spPr");
+    const xfrm = props && globalXmlParser.element(props, "xfrm");
+    const line = kind == "wsp" && ["line", "straightConnector1"].includes(props && globalXmlParser.elementAttr(props, "prstGeom", "prst"));
+    const rotation = ((xfrm && integer(globalXmlParser.attr(xfrm, "rot"))) ?? 0) % 21600000 / 60000;
+    const mapped = placeChild(frame, [...xfrmPair(xfrm, "off", "x", "y"), ...xfrmPair(xfrm, "ext", "cx", "cy")], line, rotation);
+    if (!mapped)
+        return notDrawn("group-child");
+    if (kind == "pic") {
+        const flipH = frame.flipH != (!!xfrm && globalXmlParser.boolAttr(xfrm, "flipH", false));
+        const flipV = frame.flipV != (!!xfrm && globalXmlParser.boolAttr(xfrm, "flipV", false));
+        const cssStyle = flipH || flipV ? { transform: `scale(${flipH ? -1 : 1}, ${flipV ? -1 : 1})` } : {};
+        return { ...parser.parsePicture(child), cssStyle, rotation: 0, place: mapped.place };
+    }
+    const result = kind == "grpSp" ? parseGroup(child, parser, mapped.width, mapped.height, frame.flipH, frame.flipV) : parseShape(child, parser);
+    if (result instanceof DmlShape) {
+        result.width = mapped.width;
+        result.height = mapped.height;
+        result.rotation = 0;
+        result.flipH = result.flipH != frame.flipH;
+        result.flipV = result.flipV != frame.flipV;
+    }
+    if (result instanceof DmlShape || result instanceof DrawingGroup)
+        result.place = mapped.place;
+    return result;
+}
+const hex6 = /^[0-9A-Fa-f]{6}$/;
+const schemeAliases = new Map([["bg1", "lt1"], ["tx1", "dk1"], ["bg2", "lt2"], ["tx2", "dk2"]]);
+const modifiers = new Set(["lumMod", "lumOff", "satMod", "shade", "tint", "alpha"]);
+function resolveColor(spec, theme, placeholder = null) {
+    const color = spec.kind == "schemeClr" && spec.values[0] == "phClr"
+        ? placeholder && { ...placeholder }
+        : baseColor(spec, theme);
+    if (!color)
+        return null;
+    for (const [name, value] of spec.mods) {
+        if (!modifiers.has(name))
+            continue;
+        if (!/^-?\d+$/.test(value ?? "") || name != "alpha" && !color.rgb)
+            return null;
+        const amount = parseInt(value) / 100000;
+        if (name == "alpha")
+            color.alpha = clamp(amount, 0, 1);
+        else
+            color.rgb = modify(color.rgb, name, amount);
+    }
+    return color;
+}
+function baseColor(spec, theme) {
+    const [first] = spec.values;
+    const numbers = spec.values.map(integer);
+    switch (spec.kind) {
+        case "srgbClr":
+        case "sysClr":
+            return rgbColor(hexRgb(first));
+        case "schemeClr":
+            return rgbColor(hexRgb(theme?.colorScheme?.colors[schemeAliases.get(first) ?? first]));
+        case "prstClr": {
+            const name = first?.toLowerCase().replace(/^dk/, "dark").replace(/^lt/, "light").replace(/^med/, "medium");
+            return namedColors.has(name) ? { name, alpha: 1 } : null;
+        }
+        case "scrgbClr":
+            return numbers.every(n => n != null) ? rgbColor(numbers.map(n => toGamma(clamp(n / 100000, 0, 1)))) : null;
+        case "hslClr":
+            return numbers.every(n => n != null)
+                ? rgbColor(fromHsl([(numbers[0] / 21600000 % 1 + 1) % 1, clamp(numbers[1] / 100000, 0, 1), clamp(numbers[2] / 100000, 0, 1)]))
+                : null;
+    }
+    return null;
+}
+function rgbColor(rgb) {
+    return rgb ? { rgb, alpha: 1 } : null;
+}
+function hexRgb(value) {
+    return typeof value == "string" && hex6.test(value) ? [0, 2, 4].map(i => parseInt(value.substring(i, i + 2), 16) / 255) : null;
+}
+function formatColor(color) {
+    return color.name ?? `#${color.rgb.map(c => Math.round(clamp(c, 0, 1) * 255).toString(16).padStart(2, "0")).join("")}`;
+}
+function modify(rgb, name, amount) {
+    if (name == "shade")
+        return rgb.map(c => toGamma(clamp(toLinear(c) * amount, 0, 1)));
+    if (name == "tint")
+        return rgb.map(c => toGamma(clamp(1 - (1 - toLinear(c)) * amount, 0, 1)));
+    const [h, s, l] = toHsl(rgb);
+    switch (name) {
+        case "lumMod": return fromHsl([h, s, clamp(l * amount, 0, 1)]);
+        case "lumOff": return fromHsl([h, s, clamp(l + amount, 0, 1)]);
+        default: return fromHsl([h, clamp(s * amount, 0, 1), l]);
+    }
+}
+const toLinear = (c) => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+const toGamma = (c) => c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055;
+function toHsl([r, g, b]) {
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const l = (max + min) / 2, d = max - min;
+    if (!d)
+        return [0, 0, l];
+    const h = max == r ? (g - b) / d + (g < b ? 6 : 0) : max == g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [h / 6, d / (1 - Math.abs(2 * l - 1)), l];
+}
+function fromHsl([h, s, l]) {
+    const a = s * Math.min(l, 1 - l);
+    const k = (n) => (n + h * 12) % 12;
+    return [0, 8, 4].map(n => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1)));
 }
 
 class WmlComment extends OpenXmlElementBase {
@@ -1388,7 +2215,6 @@ var autos = {
     borderColor: "black",
     highlight: "transparent"
 };
-const supportedNamespaceURIs = [];
 const mmlTagMap = {
     "oMath": DomType.MmlMath,
     "oMathPara": DomType.MmlMathParagraph,
@@ -1418,6 +2244,8 @@ const mmlTagMap = {
 };
 class DocumentParser {
     constructor(options) {
+        this.vmlShapeTypes = new Map();
+        this.drawingDepth = 0;
         this.options = {
             ignoreWidth: false,
             debug: false,
@@ -1426,6 +2254,7 @@ class DocumentParser {
     }
     parseNotes(xmlDoc, elemName, elemClass) {
         var result = [];
+        this.vmlShapeTypes.clear();
         for (let el of globalXmlParser.elements(xmlDoc, elemName)) {
             const node = new elemClass();
             node.id = globalXmlParser.attr(el, "id");
@@ -1437,6 +2266,7 @@ class DocumentParser {
     }
     parseComments(xmlDoc) {
         var result = [];
+        this.vmlShapeTypes.clear();
         for (let el of globalXmlParser.elements(xmlDoc, "comment")) {
             const item = new WmlComment();
             item.id = globalXmlParser.attr(el, "id");
@@ -1452,6 +2282,7 @@ class DocumentParser {
         var xbody = globalXmlParser.element(xmlDoc, "body");
         var background = globalXmlParser.element(xmlDoc, "background");
         var sectPr = globalXmlParser.element(xbody, "sectPr");
+        this.vmlShapeTypes.clear();
         return {
             type: DomType.Document,
             children: this.parseBodyElements(xbody),
@@ -1466,6 +2297,20 @@ class DocumentParser {
             result["background-color"] = color;
         }
         return result;
+    }
+    parseTextBoxContent(element) {
+        return this.nested(() => this.parseBodyElements(element));
+    }
+    nested(parse) {
+        if (this.drawingDepth >= 16)
+            return null;
+        this.drawingDepth++;
+        try {
+            return parse();
+        }
+        finally {
+            this.drawingDepth--;
+        }
     }
     parseBodyElements(element) {
         var children = [];
@@ -1777,7 +2622,7 @@ class DocumentParser {
     parseAltChunk(node) {
         return { type: DomType.AltChunk, children: [], id: globalXmlParser.attr(node, "id") };
     }
-    parseParagraph(node) {
+    parseParagraph(node, fillFields = true) {
         var result = { type: DomType.Paragraph, children: [] };
         for (let el of globalXmlParser.elements(node)) {
             switch (el.localName) {
@@ -1810,16 +2655,23 @@ class DocumentParser {
                     result.children.push(this.parseMathElement(el));
                     break;
                 case "sdt":
-                    result.children.push(...this.parseSdt(el, e => this.parseParagraph(e).children));
+                    result.children.push(...this.parseSdt(el, e => this.parseParagraph(e, false).children));
                     break;
                 case "ins":
-                    result.children.push(this.parseChange(DomType.Inserted, el, e => this.parseParagraph(e)));
+                    result.children.push(this.parseChange(DomType.Inserted, el, e => this.parseParagraph(e, false)));
                     break;
                 case "del":
-                    result.children.push(this.parseChange(DomType.Deleted, el, e => this.parseParagraph(e)));
+                    result.children.push(this.parseChange(DomType.Deleted, el, e => this.parseParagraph(e, false)));
                     break;
+                case "fldSimple": {
+                    const field = pageFieldResult(globalXmlParser.attr(el, "instr"), globalXmlParser.elements(el, "r").map(r => this.parseRun(r, result)));
+                    field && result.children.push(field);
+                    break;
+                }
             }
         }
+        if (fillFields)
+            wrapPageFields(result.children);
         return result;
     }
     parseParagraphProperties(elem, paragraph) {
@@ -1884,8 +2736,8 @@ class DocumentParser {
     }
     parseRun(node, parent) {
         var result = { type: DomType.Run, parent: parent, children: [] };
-        for (let c of globalXmlParser.elements(node)) {
-            c = this.checkAlternateContent(c);
+        for (const child of globalXmlParser.elements(node)) {
+            const c = this.checkAlternateContent(child);
             switch (c?.localName) {
                 case "t":
                     result.children.push({
@@ -1969,12 +2821,14 @@ class DocumentParser {
                         result.children.push(d);
                     break;
                 case "pict":
-                    result.children.push(this.parseVmlPicture(c));
+                    result.children.push(this.parseVmlPicture(c, c === child));
                     break;
                 case "rPr":
                     this.parseRunProperties(c, result);
                     break;
             }
+            if (c !== child && (!c || c.nextElementSibling))
+                result.children.push(notDrawn("alternate"));
         }
         return result;
     }
@@ -2038,10 +2892,10 @@ class DocumentParser {
             return true;
         });
     }
-    parseVmlPicture(elem) {
+    parseVmlPicture(elem, watermarkAllowed = false) {
         const result = { type: DomType.VmlPicture, children: [] };
         for (const el of globalXmlParser.elements(elem)) {
-            const child = parseVmlElement(el, this);
+            const child = parseVmlElement(el, this, watermarkAllowed);
             child && result.children.push(child);
         }
         return result;
@@ -2049,13 +2903,9 @@ class DocumentParser {
     checkAlternateContent(elem) {
         if (elem.localName != 'AlternateContent')
             return elem;
-        var choice = globalXmlParser.element(elem, "Choice");
-        if (choice) {
-            var requires = globalXmlParser.attr(choice, "Requires");
-            var namespaceURI = elem.lookupNamespaceURI(requires);
-            if (supportedNamespaceURIs.includes(namespaceURI))
-                return choice.firstElementChild;
-        }
+        const choice = globalXmlParser.element(elem, "Choice");
+        if (choice && canDrawChoice(choice))
+            return choice.firstElementChild;
         return globalXmlParser.element(elem, "Fallback")?.firstElementChild;
     }
     parseDrawing(node) {
@@ -2070,6 +2920,9 @@ class DocumentParser {
     parseDrawingWrapper(node) {
         var result = { type: DomType.Drawing, children: [], cssStyle: {} };
         var isAnchor = node.localName == "anchor";
+        const docPr = globalXmlParser.element(node, "docPr");
+        if (docPr && globalXmlParser.boolAttr(docPr, "hidden", false))
+            return null;
         let wrapType = null;
         let simplePos = globalXmlParser.boolAttr(node, "simplePos");
         globalXmlParser.boolAttr(node, "behindDoc");
@@ -2113,22 +2966,14 @@ class DocumentParser {
                     break;
             }
         }
+        if (g?.type == DomType.Shape || g?.type == DomType.Group || (isAnchor && wrapType == "wrapNone" && g?.type == DomType.Image))
+            return parseShapeDrawing(node, g, this.drawingDepth > 0);
         if (wrapType == "wrapTopAndBottom") {
             result.cssStyle['display'] = 'block';
             if (posX.align) {
                 result.cssStyle['text-align'] = posX.align;
                 result.cssStyle['width'] = "100%";
             }
-        }
-        else if (wrapType == "wrapNone") {
-            result.cssStyle['display'] = 'block';
-            result.cssStyle['position'] = 'relative';
-            result.cssStyle["width"] = "0px";
-            result.cssStyle["height"] = "0px";
-            if (posX.offset)
-                result.cssStyle["left"] = posX.offset;
-            if (posY.offset)
-                result.cssStyle["top"] = posY.offset;
         }
         else if (isAnchor && (posX.align == 'left' || posX.align == 'right')) {
             result.cssStyle["float"] = posX.align;
@@ -2137,13 +2982,17 @@ class DocumentParser {
     }
     parseGraphic(elem) {
         var graphicData = globalXmlParser.element(elem, "graphicData");
-        for (let n of globalXmlParser.elements(graphicData)) {
+        for (let n of graphicData ? globalXmlParser.elements(graphicData) : []) {
             switch (n.localName) {
                 case "pic":
                     return this.parsePicture(n);
+                case "wsp":
+                    return isDrawableShape(n) ? parseShape(n, this) : notDrawn("graphic");
+                case "wgp":
+                    return parseDrawingGroup(n, globalXmlParser.element(elem.parentNode, "extent"), this);
             }
         }
-        return null;
+        return notDrawn("graphic");
     }
     parsePicture(elem) {
         var result = { type: DomType.Image, src: "", cssStyle: {} };
@@ -2280,7 +3129,7 @@ class DocumentParser {
                     row.className = values.classNameOfCnfStyle(c);
                     break;
                 case "tblHeader":
-                    row.isHeader = globalXmlParser.boolAttr(c, "val");
+                    row.isHeader = globalXmlParser.boolAttr(c, "val", true);
                     break;
                 case "gridBefore":
                     row.gridBefore = globalXmlParser.intAttr(c, "val");
@@ -2460,7 +3309,7 @@ class DocumentParser {
                         style["overflow-wrap"] = "break-word";
                     break;
                 case "suppressAutoHyphens":
-                    style["hyphens"] = globalXmlParser.boolAttr(c, "val", true) ? "none" : "auto";
+                    style["hyphens"] = globalXmlParser.boolAttr(c, "val", true) ? "none" : "inherit";
                     break;
                 case "lang":
                     style["$lang"] = globalXmlParser.attr(c, "val");
@@ -2469,6 +3318,12 @@ class DocumentParser {
                 case "bidi":
                     if (globalXmlParser.boolAttr(c, "val", true))
                         style["direction"] = "rtl";
+                    break;
+                case "keepLines":
+                    style["break-inside"] = globalXmlParser.boolAttr(c, "val", true) ? "avoid" : "auto";
+                    break;
+                case "keepNext":
+                    style["break-after"] = globalXmlParser.boolAttr(c, "val", true) ? "avoid" : "auto";
                     break;
                 case "bCs":
                 case "iCs":
@@ -2481,8 +3336,6 @@ class DocumentParser {
                 case "webHidden":
                 case "pageBreakBefore":
                 case "suppressLineNumbers":
-                case "keepLines":
-                case "keepNext":
                 case "widowControl":
                 case "noProof":
                     break;
@@ -2563,23 +3416,22 @@ class DocumentParser {
     parseSpacing(node, style) {
         var before = globalXmlParser.lengthAttr(node, "before");
         var after = globalXmlParser.lengthAttr(node, "after");
-        var line = globalXmlParser.intAttr(node, "line", null);
-        var lineRule = globalXmlParser.attr(node, "lineRule");
+        var line = globalXmlParser.attr(node, "line");
+        var lineRule = globalXmlParser.attr(node, "lineRule") ?? "auto";
         if (before)
             style["margin-top"] = before;
         if (after)
             style["margin-bottom"] = after;
-        if (line !== null) {
-            switch (lineRule) {
-                case "auto":
-                    style["line-height"] = `${(line / 240).toFixed(2)}`;
-                    break;
-                case "atLeast":
-                    style["line-height"] = `calc(100% + ${line / 20}pt)`;
-                    break;
-                default:
-                    style["line-height"] = style["min-height"] = `${line / 20}pt`;
-                    break;
+        if (line) {
+            style["--docx-run-line-height"] = lineRule == "atLeast" ? "normal" : "initial";
+            if (lineRule == "auto") {
+                const multiple = Number(line) / 240;
+                if (multiple >= 0.005)
+                    style["line-height"] = multiple.toFixed(2);
+            }
+            else {
+                const length = convertLength(line, LengthUsage.Dxa);
+                style["line-height"] = style["min-height"] = length;
             }
         }
     }
@@ -2785,77 +3637,214 @@ class values {
         return className.trim();
     }
 }
-
-const defaultTab = { pos: 0, leader: "none", style: "left" };
-const maxTabs = 50;
-function computePixelToPoint(container = document.body) {
-    const temp = document.createElement("div");
-    temp.style.width = '100pt';
-    container.appendChild(temp);
-    const result = 100 / temp.offsetWidth;
-    container.removeChild(temp);
-    return result;
+const pageFieldInstruction = /^\s*(PAGE|NUMPAGES)(\s+\\\*\s*(MERGEFORMAT|ARABIC))*\s*$/i;
+function pageFieldResult(instruction, children) {
+    const field = instruction?.match(pageFieldInstruction)?.[1].toUpperCase();
+    if (!field || children.some(c => c.type == DomType.Run && c.children.some(x => x.type == DomType.Break)))
+        return null;
+    return { type: DomType.FieldResult, field: field, children };
 }
-function updateTabStop(elem, tabs, defaultTabSize, pixelToPoint = 72 / 96) {
-    const p = elem.closest("p");
-    const ebb = elem.getBoundingClientRect();
-    const pbb = p.getBoundingClientRect();
-    const pcs = getComputedStyle(p);
-    const tabStops = tabs?.length > 0 ? tabs.map(t => ({
-        pos: lengthToPoint(t.position),
-        leader: t.leader,
-        style: t.style
-    })).sort((a, b) => a.pos - b.pos) : [defaultTab];
-    const lastTab = tabStops[tabStops.length - 1];
-    const pWidthPt = pbb.width * pixelToPoint;
-    const size = lengthToPoint(defaultTabSize);
-    let pos = lastTab.pos + size;
-    if (pos < pWidthPt) {
-        for (; pos < pWidthPt && tabStops.length < maxTabs; pos += size) {
-            tabStops.push({ ...defaultTab, pos: pos });
+function wrapPageFields(children) {
+    const open = [];
+    const closed = [];
+    children.forEach((child, index) => {
+        if (child.type != DomType.Run)
+            return;
+        for (const c of child.children) {
+            const top = open[open.length - 1];
+            if (c.type == DomType.ComplexField) {
+                const charType = c.charType;
+                if (charType == "begin") {
+                    open.forEach(f => f.fillable = false);
+                    open.push({ fillable: !open.length, instruction: "", run: child, separate: -1, end: -1, savedText: "" });
+                }
+                else if (charType == "separate" && top) {
+                    top.separate = index;
+                }
+                else if (charType == "end" && top) {
+                    open.pop();
+                    top.end = index;
+                    top.fillable && closed.push(top);
+                }
+            }
+            else if (c.type == DomType.Instruction && top) {
+                top.instruction += c.text;
+            }
+            else if (c.type == DomType.Text && top?.separate == index) {
+                top.savedText += c.text;
+            }
+        }
+    });
+    for (const f of closed.reverse()) {
+        const between = f.separate < 0 ? [] : children.slice(f.separate + 1, f.end);
+        if (between.some(c => c.type == DomType.Run)) {
+            const field = pageFieldResult(f.instruction, between);
+            field && children.splice(f.separate + 1, between.length, field);
+        }
+        else if (between.length == 0) {
+            const run = { ...f.run, fieldRun: false, children: [{ type: DomType.Text, text: f.savedText }] };
+            const field = pageFieldResult(f.instruction, [run]);
+            field && children.splice(f.end, 0, field);
         }
     }
-    const marginLeft = parseFloat(pcs.marginLeft);
-    const pOffset = pbb.left + marginLeft;
-    const left = (ebb.left - pOffset) * pixelToPoint;
-    const tab = tabStops.find(t => t.style != "clear" && t.pos > left);
-    if (tab == null)
+}
+
+const registered = new WeakMap();
+const posTolerance = 0.01;
+const leaderBorders = {
+    dot: "1px dotted",
+    middleDot: "1px dotted",
+    hyphen: "1px dashed",
+    underscore: "1px solid",
+    heavy: "2px solid",
+};
+function registerTabStop(span, stops, defaultTabSize) {
+    registered.set(span, { stops, defaultTabSize });
+}
+function mergeTabs(base, own) {
+    if (!base?.length)
+        return own;
+    if (!own?.length)
+        return base;
+    const samePos = (a, b) => Math.abs(lengthToPoint(a.position) - lengthToPoint(b.position)) < posTolerance;
+    return [...base.filter(b => !own.some(o => samePos(o, b))), ...own];
+}
+function cloneWithTabStops(source) {
+    const copy = source.cloneNode(true);
+    const originals = source.querySelectorAll("span");
+    const copies = copy.querySelectorAll("span");
+    originals.forEach((span, i) => {
+        const registration = registered.get(span);
+        if (registration)
+            registered.set(copies[i], registration);
+    });
+    return copy;
+}
+function remeasureTabStops(root, className = "docx") {
+    measureTabSpans(Array.from(root.querySelectorAll(`.${className}-tab-stop`)));
+}
+function measureTabSpans(spans) {
+    let groups = groupByParagraph(spans.filter(s => registered.has(s) && s.isConnected && s.closest("p")?.getBoundingClientRect().width > 0 && getComputedStyle(s.closest("p")).direction != "rtl"));
+    if (groups.length == 0)
         return;
-    let width = 1;
-    if (tab.style == "right" || tab.style == "center") {
-        const tabStops = Array.from(p.querySelectorAll(`.${elem.className}`));
-        const nextIdx = tabStops.indexOf(elem) + 1;
-        const range = document.createRange();
-        range.setStart(elem, 1);
-        if (nextIdx < tabStops.length) {
-            range.setEndBefore(tabStops[nextIdx]);
+    groups.forEach(g => g.spans.forEach(reset));
+    const scales = new Map();
+    for (const g of groups) {
+        const host = g.p.closest("section") ?? g.p.parentElement;
+        if (!scales.has(host)) {
+            const probe = document.createElement("div");
+            probe.style.cssText = "position:absolute;visibility:hidden;width:100pt";
+            host.appendChild(probe);
+            scales.set(host, probe.getBoundingClientRect().width / 100);
+            probe.remove();
         }
-        else {
-            range.setEndAfter(p);
+        g.scale = scales.get(host);
+    }
+    groups = groups.filter(g => g.scale > 0);
+    const rounds = Math.max(...groups.map(g => g.spans.length));
+    for (let k = 0; k < rounds; k++) {
+        const round = groups.filter(g => k < g.spans.length);
+        for (const g of round) {
+            const span = g.spans[k];
+            span.textContent = "\t";
+            span.style.fontSize = "0";
+            span.style.display = "inline-block";
+            span.style.width = "0";
         }
-        const mul = tab.style == "center" ? 0.5 : 1;
-        const nextBB = range.getBoundingClientRect();
-        const offset = nextBB.left + mul * nextBB.width - (pbb.left - marginLeft);
-        width = tab.pos - offset * pixelToPoint;
+        const measured = round.map(g => measureTab(g, k, g.scale));
+        round.forEach((g, i) => {
+            const span = g.spans[k];
+            span.style.width = `${measured[i].width.toFixed(2)}pt`;
+            const border = leaderBorders[measured[i].leader];
+            if (border)
+                span.style.borderBottom = border;
+        });
     }
-    else {
-        width = tab.pos - left;
+}
+function reset(span) {
+    span.removeAttribute("style");
+    span.textContent = "\u2003";
+}
+function groupByParagraph(spans) {
+    const sorted = [...spans].sort((a, b) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+    const groups = new Map();
+    for (const span of sorted) {
+        const p = span.closest("p");
+        let group = groups.get(p);
+        if (!group) {
+            const { stops, defaultTabSize } = registered.get(span);
+            const all = (stops ?? []).map(t => ({ pos: lengthToPoint(t.position), leader: t.leader, style: t.style }));
+            group = {
+                p,
+                spans: [],
+                stops: all.filter(t => t.style != "clear" && t.style != "bar").sort((a, b) => a.pos - b.pos),
+                clears: all.filter(t => t.style == "clear").map(t => t.pos),
+                defaultTabSize: lengthToPoint(defaultTabSize) || 36,
+            };
+            groups.set(p, group);
+        }
+        group.spans.push(span);
     }
-    elem.innerHTML = "&nbsp;";
-    elem.style.textDecoration = "inherit";
-    elem.style.wordSpacing = `${width.toFixed(0)}pt`;
-    switch (tab.leader) {
-        case "dot":
-        case "middleDot":
-            elem.style.textDecoration = "underline";
-            elem.style.textDecorationStyle = "dotted";
+    return [...groups.values()];
+}
+function nextStop(g, x) {
+    const declared = g.stops.find(t => t.pos > x + posTolerance);
+    if (declared)
+        return declared;
+    const size = g.defaultTabSize;
+    let pos = (Math.floor((x + posTolerance) / size) + 1) * size;
+    while (g.clears.some(c => Math.abs(c - pos) < posTolerance))
+        pos += size;
+    return { pos, leader: "none", style: "left" };
+}
+function measureTab(g, k, scale) {
+    const span = g.spans[k];
+    const pbb = g.p.getBoundingClientRect();
+    const pcs = getComputedStyle(g.p);
+    const cssPx = scale * 0.75;
+    const origin = pbb.left - parseFloat(pcs.marginLeft) * cssPx;
+    const sbb = span.getBoundingClientRect();
+    const x = (sbb.left - origin) / scale;
+    const tab = nextStop(g, x);
+    const segment = (stopAt) => segmentWidth(span, g.spans[k + 1], g.p, sbb, stopAt) / scale;
+    let width;
+    switch (tab.style) {
+        case "right":
+        case "end":
+            width = tab.pos - x - segment();
             break;
-        case "hyphen":
-        case "heavy":
-        case "underscore":
-            elem.style.textDecoration = "underline";
+        case "center":
+            width = tab.pos - x - segment() / 2;
             break;
+        case "decimal":
+            width = tab.pos - x - segment(".");
+            break;
+        default:
+            width = tab.pos - x;
     }
+    const room = (pbb.right - parseFloat(pcs.paddingRight) * cssPx - sbb.left) / scale;
+    return { width: Math.max(0, Math.min(width, room)), leader: tab.leader };
+}
+function segmentWidth(span, next, p, sbb, stopAt) {
+    const range = document.createRange();
+    range.setStartAfter(span);
+    if (next)
+        range.setEndBefore(next);
+    else
+        range.setEnd(p, p.childNodes.length);
+    if (stopAt) {
+        const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+        walker.currentNode = span.lastChild ?? span;
+        for (let n = walker.nextNode(); n && range.isPointInRange(n, 0); n = walker.nextNode()) {
+            const i = n.textContent.indexOf(stopAt);
+            if (i >= 0) {
+                range.setEnd(n, i);
+                break;
+            }
+        }
+    }
+    const rights = Array.from(range.getClientRects()).filter(r => r.width > 0 && r.top < sbb.bottom).map(r => r.right);
+    return rights.length ? Math.max(0, Math.max(...rights) - sbb.left) : 0;
 }
 function lengthToPoint(length) {
     return parseFloat(length);
@@ -2889,7 +3878,12 @@ function h(elem) {
             result.setAttribute("style", style);
         }
         else {
-            Object.assign(result.style, style);
+            for (const [key, value] of Object.entries(style)) {
+                if (key.startsWith("--"))
+                    result.style.setProperty(key, value);
+                else
+                    result.style[key] = value;
+            }
         }
     }
     if (props) {
@@ -2905,11 +3899,58 @@ function cx(...classNames) {
     return classNames.filter(Boolean).join(" ");
 }
 
+const pageVariableNames = ["--docx-page-width", "--docx-page-height", "--docx-margin-left", "--docx-margin-right", "--docx-margin-top", "--docx-margin-bottom"];
+const pageWidth = "var(--docx-page-width, 100%)";
+const pageHeight = "var(--docx-page-height, 100%)";
+const marginLeft = "var(--docx-margin-left, 0pt)";
+const marginRight = "var(--docx-margin-right, 0pt)";
+const marginTop = "var(--docx-margin-top, 0pt)";
+const marginBottom = "var(--docx-margin-bottom, 0pt)";
+const textColumn = [marginLeft, `(${pageWidth} - ${marginLeft} - ${marginRight})`];
+const horizontalFrames = {
+    page: ["0pt", pageWidth],
+    margin: textColumn,
+    column: textColumn,
+    leftMargin: ["0pt", marginLeft],
+    rightMargin: [`(${pageWidth} - ${marginRight})`, marginRight],
+};
+const verticalFrames = {
+    page: ["0pt", pageHeight],
+    margin: [marginTop, `(${pageHeight} - ${marginTop} - ${marginBottom})`],
+    topMargin: ["0pt", marginTop],
+    bottomMargin: [`(${pageHeight} - ${marginBottom})`, marginBottom],
+};
+const vmlHorizontalFrames = new Map([
+    ["page", horizontalFrames.page], ["margin", textColumn], ["text", textColumn],
+    ["left-margin-area", horizontalFrames.leftMargin], ["inner-margin-area", horizontalFrames.leftMargin],
+    ["right-margin-area", horizontalFrames.rightMargin], ["outer-margin-area", horizontalFrames.rightMargin],
+]);
+const vmlVerticalFrames = new Map([
+    ["page", verticalFrames.page], ["margin", verticalFrames.margin],
+    ["top-margin-area", verticalFrames.topMargin], ["inner-margin-area", verticalFrames.topMargin],
+    ["bottom-margin-area", verticalFrames.bottomMargin], ["outer-margin-area", verticalFrames.bottomMargin],
+]);
+const vmlAlignShare = new Map([["left", 0], ["top", 0], ["inside", 0], ["center", 0.5], ["right", 1], ["bottom", 1], ["outside", 1]]);
+function vmlEdge(frames, relative, align, offset, size) {
+    const frame = frames.get(relative);
+    if (!frame)
+        return null;
+    const [start, length] = frame;
+    const share = vmlAlignShare.get(align);
+    return share == null || size == null
+        ? `calc(${start} + ${formatNumber(offset)}pt)`
+        : `calc(${start} + (${length} - ${formatNumber(size)}pt) * ${share})`;
+}
+const drawnHeads = new Set(["triangle", "arrow", "stealth"]);
+const headScale = { sm: 2, med: 3, lg: 5 };
+const hasOwn = (record, key) => key != null && Object.prototype.hasOwnProperty.call(record, key);
+const pt = (value) => `${formatNumber(value)}pt`;
 class HtmlRenderer {
     constructor() {
         this.className = "docx";
         this.styleMap = {};
         this.currentPart = null;
+        this.currentSectProps = null;
         this.tableVerticalMerges = [];
         this.currentVerticalMerge = null;
         this.tableCellPositions = [];
@@ -2935,7 +3976,7 @@ class HtmlRenderer {
         if (this.options.renderComments && globalThis.Highlight) {
             this.commentHighlight = new Highlight();
         }
-        const result = [...this.renderDefaultStyle()];
+        const result = [...this.renderDefaultStyle(document.stylesPart?.styles)];
         if (document.themePart) {
             result.push(...this.renderTheme(document.themePart));
         }
@@ -3031,7 +4072,10 @@ class HtmlRenderer {
         for (const style of styles.filter(x => x.basedOn)) {
             var baseStyle = stylesMap[style.basedOn];
             if (baseStyle) {
+                const tabs = mergeTabs(baseStyle.paragraphProps?.tabs, style.paragraphProps?.tabs);
                 style.paragraphProps = mergeDeep(style.paragraphProps, baseStyle.paragraphProps);
+                if (tabs)
+                    style.paragraphProps = { ...style.paragraphProps, tabs };
                 style.runProps = mergeDeep(style.runProps, baseStyle.runProps);
                 for (const baseValues of baseStyle.styles) {
                     const styleValues = style.styles.find(x => x.target == baseValues.target);
@@ -3111,6 +4155,17 @@ class HtmlRenderer {
                 if (!this.options.ignoreHeight)
                     style.minHeight = props.pageSize.height;
             }
+            const pageVariables = {
+                "--docx-page-width": props.pageSize?.width,
+                "--docx-page-height": props.pageSize?.height,
+                "--docx-margin-left": props.pageMargins?.left,
+                "--docx-margin-right": props.pageMargins?.right,
+                "--docx-margin-top": props.pageMargins?.top,
+                "--docx-margin-bottom": props.pageMargins?.bottom,
+            };
+            for (const [key, value] of Object.entries(pageVariables))
+                if (value)
+                    style[key] = value;
         }
         return this.h({ tagName: "section", className, style });
     }
@@ -3136,22 +4191,33 @@ class HtmlRenderer {
             const section = pages[i][0];
             let props = section.sectProps;
             const pageElement = this.createPageElement(this.className, props, document.cssStyle);
+            const pageNumber = props?.pageNumber;
+            if (pageNumber?.start != null && prevProps != props && props.type != SectionType.Continuous && props.type != SectionType.NextColumn)
+                pageElement.setAttribute("data-page-start", String(pageNumber.start));
+            if (pageNumber?.chapStyle || pageNumber?.format && pageNumber.format != "decimal")
+                pageElement.setAttribute("data-page-format", pageNumber.chapStyle ? "other" : pageNumber.format);
+            if (prevProps != props && (props?.type == SectionType.EvenPage || props?.type == SectionType.OddPage))
+                pageElement.setAttribute("data-page-parity", props.type == SectionType.EvenPage ? "even" : "odd");
+            this.currentSectProps = props;
             this.options.renderHeaders && this.renderHeaderFooter(props.headerRefs, props, result.length, prevProps != props, pageElement);
             for (const sect of pages[i]) {
+                this.currentSectProps = sect.sectProps;
                 var contentElement = this.createSectionContent(sect.sectProps);
                 this.renderElements(sect.elements, contentElement);
                 pageElement.appendChild(contentElement);
                 props = sect.sectProps;
             }
             if (this.options.renderFootnotes) {
-                const notes = this.renderNotes(this.currentFootnoteIds, this.footnoteMap);
+                const notes = this.renderNotes(this.currentFootnoteIds, this.footnoteMap, "footnotes");
                 notes && pageElement.appendChild(notes);
             }
             if (this.options.renderEndnotes && i == l - 1) {
-                const notes = this.renderNotes(this.currentEndnoteIds, this.endnoteMap);
+                const notes = this.renderNotes(this.currentEndnoteIds, this.endnoteMap, "endnotes");
                 notes && pageElement.appendChild(notes);
             }
             this.options.renderFooters && this.renderHeaderFooter(props.footerRefs, props, result.length, prevProps != props, pageElement);
+            if (!pageElement.querySelector('[style*="var(--docx-"]'))
+                pageVariableNames.forEach(name => pageElement.style.removeProperty(name));
             result.push(pageElement);
             prevProps = props;
         }
@@ -3164,8 +4230,12 @@ class HtmlRenderer {
         var ref = (props.titlePage && firstOfSection ? refs.find(x => x.type == "first") : null)
             ?? (page % 2 == 1 && evenAndOddHeaders ? refs.find(x => x.type == "even") : null)
             ?? refs.find(x => x.type == "default");
-        var part = ref && this.document.findPartByRelId(ref.id, this.document.documentPart);
-        if (part) {
+        if (ref?.type == "first")
+            into.setAttribute("data-docx-first-page", "");
+        for (const alt of refs.filter(x => x == ref || this.options.paginate && (x.type == "default" || (x.type == "even" && evenAndOddHeaders)))) {
+            var part = this.document.findPartByRelId(alt.id, this.document.documentPart);
+            if (!part)
+                continue;
             this.currentPart = part;
             if (!this.usedHederFooterParts.includes(part.path)) {
                 this.processElement(part.rootElement);
@@ -3182,6 +4252,9 @@ class HtmlRenderer {
                     el.style.minHeight = `calc(${props.pageMargins.bottom} - ${props.pageMargins.footer})`;
                 }
             }
+            el.setAttribute("data-docx-hf", alt.type);
+            if (alt != ref)
+                el.style.display = "none";
             this.currentPart = null;
         }
     }
@@ -3192,6 +4265,14 @@ class HtmlRenderer {
             return !this.options.ignoreLastRenderedPageBreak;
         return elem.break == "page";
     }
+    containsPageBreak(elem) {
+        if (elem.type == DomType.Drawing || elem.type == DomType.VmlElement || elem.type == DomType.VmlPicture)
+            return false;
+        return elem.children?.some(c => this.isPageBreakElement(c) || this.containsPageBreak(c)) ?? false;
+    }
+    containsText(elems) {
+        return elems.some(e => (e.type == DomType.Text && e.text) || this.containsText(e.children ?? []));
+    }
     isPageBreakSection(prev, next) {
         if (!prev)
             return false;
@@ -3201,6 +4282,10 @@ class HtmlRenderer {
             || prev.pageSize?.width != next.pageSize?.width
             || prev.pageSize?.height != next.pageSize?.height;
     }
+    isNewPageSection(prev, next) {
+        return this.options.ignoreLastRenderedPageBreak && prev !== next
+            && (!next?.type || next.type == SectionType.NextPage || next.type == SectionType.EvenPage || next.type == SectionType.OddPage);
+    }
     splitBySection(elements, defaultProps) {
         var current = { sectProps: null, elements: [], pageBreak: false };
         var result = [current];
@@ -3209,11 +4294,34 @@ class HtmlRenderer {
                 const p = elem;
                 const s = this.findStyle(p.styleName);
                 if (p.pageBreakBefore || s?.paragraphProps?.pageBreakBefore) {
-                    current.sectProps = sectProps;
+                    current.sectProps = null;
                     current.pageBreak = true;
                     current = { sectProps: null, elements: [], pageBreak: false };
                     result.push(current);
                 }
+            }
+            if (elem.type == DomType.Table && this.options.breakPages) {
+                const rows = elem.children;
+                const headerCount = rows.findIndex(r => !r.isHeader);
+                const headers = headerCount > 0 ? rows.slice(0, headerCount) : [];
+                const firstRows = Math.max(headerCount, 1);
+                let start = 0;
+                if (current.elements.length > 0 && rows.slice(0, firstRows).some(r => this.containsPageBreak(r))) {
+                    current.pageBreak = true;
+                    current = { sectProps: null, elements: [], pageBreak: false };
+                    result.push(current);
+                }
+                for (let i = firstRows; i < rows.length; i++) {
+                    if (!this.containsPageBreak(rows[i]))
+                        continue;
+                    current.elements.push({ ...elem, children: [...(start ? headers : []), ...rows.slice(start, i)] });
+                    current.pageBreak = true;
+                    current = { sectProps: null, elements: [], pageBreak: false };
+                    result.push(current);
+                    start = i;
+                }
+                if (start > 0)
+                    elem = { ...elem, children: [...headers, ...rows.slice(start)] };
             }
             current.elements.push(elem);
             if (elem.type == DomType.Paragraph) {
@@ -3222,8 +4330,11 @@ class HtmlRenderer {
                 var pBreakIndex = -1;
                 var rBreakIndex = -1;
                 if (this.options.breakPages && p.children) {
-                    pBreakIndex = p.children.findIndex(r => {
-                        rBreakIndex = r.children?.findIndex(this.isPageBreakElement.bind(this)) ?? -1;
+                    const pageStart = current.elements.length == 1 && result.length > 1 && result[result.length - 2].pageBreak;
+                    pBreakIndex = p.children.findIndex((r, ri) => {
+                        rBreakIndex = r.children?.findIndex((c, ci) => this.isPageBreakElement(c)
+                            && !(pageStart && c.break == "lastRenderedPageBreak"
+                                && !this.containsText(p.children.slice(0, ri)) && !this.containsText(r.children.slice(0, ci)))) ?? -1;
                         return rBreakIndex != -1;
                     });
                 }
@@ -3264,20 +4375,25 @@ class HtmlRenderer {
     }
     groupByPageBreaks(sections) {
         let current = [];
-        let prev;
+        let prev = null;
+        let pageBreak = false;
         const result = [current];
         for (let s of sections) {
+            if (s.elements.length) {
+                if (prev && (pageBreak || this.isPageBreakSection(prev.sectProps, s.sectProps) || this.isNewPageSection(prev.sectProps, s.sectProps)))
+                    result.push(current = []);
+                prev = s;
+                pageBreak = false;
+            }
             current.push(s);
-            if (this.options.ignoreLastRenderedPageBreak || s.pageBreak || this.isPageBreakSection(prev, s.sectProps))
-                result.push(current = []);
-            prev = s.sectProps;
+            pageBreak || (pageBreak = s.pageBreak);
         }
         return result.filter(x => x.length > 0);
     }
     renderWrapper(children) {
         return this.h({ tagName: "div", className: `${this.className}-wrapper`, children });
     }
-    renderDefaultStyle() {
+    renderDefaultStyle(styles) {
         var c = this.className;
         var wrapperStyle = `
 .${c}-wrapper { background: gray; padding: 30px; padding-bottom: 0px; display: flex; flex-flow: column; align-items: center; } 
@@ -3286,17 +4402,23 @@ class HtmlRenderer {
             wrapperStyle = `@media not print { ${wrapperStyle} }`;
         }
         var styleText = `${wrapperStyle}
-.${c} { color: black; hyphens: auto; text-underline-position: from-font; }
+.${c} { color: black; hyphens: ${this.document.settingsPart?.settings?.autoHyphenation ? "auto" : "manual"}; text-underline-position: from-font; }
 section.${c} { box-sizing: border-box; display: flex; flex-flow: column nowrap; position: relative; overflow: hidden; }
 section.${c}>article { margin-bottom: auto; z-index: 1; }
+section.${c}>header { z-index: 1; }
 section.${c}>footer { z-index: 1; }
 .${c} table { border-collapse: collapse; }
 .${c} table td, .${c} table th { vertical-align: top; }
-.${c} p { margin: 0pt; min-height: 1em; }
-.${c} span { white-space: pre-wrap; overflow-wrap: break-word; }
+.${c} p { margin: 0pt; min-height: 1em; --docx-run-line-height: initial; }
+.${c} p.${c}-continued::before { content: none; }
+.${c} span { white-space: pre-wrap; overflow-wrap: break-word; line-height: var(--docx-run-line-height, inherit); }
 .${c} a { color: inherit; text-decoration: inherit; }
 .${c} svg { fill: transparent; }
 `;
+        const setsFontSize = styles?.some(s => (s.id == null || (s.isDefault && s.target == "p"))
+            && s.styles.some(x => x.target == "span" && x.values["font-size"]));
+        if (!setsFontSize)
+            styleText += `section.${c} { font-size: 10pt; }\n`;
         if (this.options.renderComments) {
             styleText += `
 .${c}-comment-ref { cursor: default; }
@@ -3382,10 +4504,21 @@ section.${c}>footer { z-index: 1; }
             }
             for (const subStyle of subStyles) {
                 var selector = `${style.target ?? ''}.${style.cssName}`;
-                if (style.target != subStyle.target)
-                    selector += ` ${subStyle.target}`;
-                if (defautStyles[style.target] == style)
-                    selector = `.${this.className} ${style.target}, ` + selector;
+                const subTarget = style.target != subStyle.target ? ` ${subStyle.target}` : '';
+                if (style.target == null)
+                    selector = `:where(${selector})`;
+                selector += subTarget;
+                if (defautStyles[style.target] == style) {
+                    const own = !subTarget || style.target == "p" ? `.${this.className} ${style.target}, ` : "";
+                    const sub = subTarget ? `:where(.${this.className}) ${style.target}${subTarget}, ` : "";
+                    selector = own + sub + selector;
+                }
+                if (subStyle.target == "span" && (style.target == null || style.target == "p")) {
+                    const font = Object.fromEntries(Object.entries(subStyle.values).filter(([key]) => ["font-family", "font-size", "font-weight", "font-style"].includes(key)));
+                    const parentSelector = selector.split(", ").map(s => s.replace(/ span$/, "")).join(", ");
+                    if (Object.keys(font).length)
+                        styleText += this.styleToString(parentSelector, font);
+                }
                 styleText += this.styleToString(selector, subStyle.values);
             }
         }
@@ -3394,10 +4527,12 @@ section.${c}>footer { z-index: 1; }
             this.h({ tagName: "style", children: [styleText] })
         ];
     }
-    renderNotes(noteIds, notesMap) {
+    renderNotes(noteIds, notesMap, kind) {
         var notes = noteIds.map(id => notesMap[id]).filter(x => x);
         if (notes.length > 0) {
-            return this.h({ tagName: "ol", children: this.renderElements(notes) });
+            const list = this.h({ tagName: "ol", children: this.renderElements(notes) });
+            list.setAttribute("data-docx-notes", kind);
+            return list;
         }
     }
     renderElement(elem) {
@@ -3410,6 +4545,8 @@ section.${c}>footer { z-index: 1; }
                 return null;
             case DomType.Run:
                 return this.renderRun(elem);
+            case DomType.FieldResult:
+                return this.renderFieldResult(elem);
             case DomType.Table:
                 return this.renderTable(elem);
             case DomType.Row:
@@ -3453,6 +4590,10 @@ section.${c}>footer { z-index: 1; }
                 return this.renderVmlPicture(elem);
             case DomType.VmlElement:
                 return this.renderVmlElement(elem);
+            case DomType.Shape:
+                return this.renderDmlShape(elem);
+            case DomType.Group:
+                return this.renderGroup(elem);
             case DomType.MmlMath:
                 return this.renderContainerNS(elem, ns.mathML, "math", { xmlns: ns.mathML });
             case DomType.MmlMathParagraph:
@@ -3529,9 +4670,13 @@ section.${c}>footer { z-index: 1; }
         return this.h({ ns, tagName, children: this.renderElements(elem.children), ...props });
     }
     renderParagraph(elem) {
-        var result = this.toHTML(elem, ns.html, "p");
+        if (elem.keepNext != null)
+            (elem.cssStyle ?? (elem.cssStyle = {}))["break-after"] = elem.keepNext ? "avoid" : "auto";
+        if (elem.keepLines != null)
+            (elem.cssStyle ?? (elem.cssStyle = {}))["break-inside"] = elem.keepLines ? "avoid" : "auto";
         const style = this.findStyle(elem.styleName);
-        elem.tabs ?? (elem.tabs = style?.paragraphProps?.tabs);
+        elem.tabs = mergeTabs(style?.paragraphProps?.tabs, elem.tabs);
+        var result = this.toHTML(elem, ns.html, "p");
         const numbering = elem.numbering ?? style?.paragraphProps?.numbering;
         if (numbering) {
             result.classList.add(this.numberingClass(numbering.id, numbering.level));
@@ -3601,6 +4746,8 @@ section.${c}>footer { z-index: 1; }
         return result;
     }
     renderDrawing(elem) {
+        if (elem.anchor)
+            return this.renderShapeDrawing(elem);
         var result = this.toHTML(elem, ns.html, "div");
         result.style.display = "inline-block";
         result.style.position = "relative";
@@ -3612,12 +4759,14 @@ section.${c}>footer { z-index: 1; }
         let transform = elem.cssStyle?.transform;
         if (elem.srcRect && elem.srcRect.some(x => x != 0)) {
             var [left, top, right, bottom] = elem.srcRect;
-            transform = `scale(${1 / (1 - left - right)}, ${1 / (1 - top - bottom)})`;
+            transform = `${transform ?? ''} scale(${1 / (1 - left - right)}, ${1 / (1 - top - bottom)})`;
             result.style['clip-path'] = `rect(${(100 * top).toFixed(2)}% ${(100 * (1 - right)).toFixed(2)}% ${(100 * (1 - bottom)).toFixed(2)}% ${(100 * left).toFixed(2)}%)`;
         }
         if (elem.rotation)
             transform = `rotate(${elem.rotation}deg) ${transform ?? ''}`;
         result.style.transform = transform?.trim();
+        if (elem.place)
+            this.placeInGroup(elem.place, result.style);
         if (this.document) {
             this.tasks.push(this.document.loadDocumentImage(elem.src, this.currentPart).then(x => {
                 result.src = x;
@@ -3654,7 +4803,9 @@ section.${c}>footer { z-index: 1; }
     }
     renderFootnoteReference(elem) {
         this.currentFootnoteIds.push(elem.id);
-        return this.h({ tagName: "sup", children: [`${this.currentFootnoteIds.length}`] });
+        const ref = this.h({ tagName: "sup", children: [`${this.currentFootnoteIds.length}`] });
+        ref.setAttribute("data-docx-footnote", "");
+        return ref;
     }
     renderEndnoteReference(elem) {
         this.currentEndnoteIds.push(elem.id);
@@ -3664,13 +4815,18 @@ section.${c}>footer { z-index: 1; }
         var tabSpan = this.h({ tagName: "span", children: ["\u2003"] });
         if (this.options.experimental) {
             tabSpan.className = this.tabStopClass();
-            var stops = findParent(elem, DomType.Paragraph)?.tabs;
-            this.currentTabs.push({ stops, span: tabSpan });
+            registerTabStop(tabSpan, findParent(elem, DomType.Paragraph)?.tabs, this.defaultTabSize);
+            this.currentTabs.push(tabSpan);
         }
         return tabSpan;
     }
     renderBookmarkStart(elem) {
         return this.h({ tagName: "span", id: elem.name });
+    }
+    renderFieldResult(elem) {
+        const result = this.h({ tagName: "span", children: this.renderElements(elem.children) });
+        result.setAttribute("data-docx-field", elem.field);
+        return result;
     }
     renderRun(elem) {
         if (elem.fieldRun)
@@ -3692,7 +4848,13 @@ section.${c}>footer { z-index: 1; }
         const children = [];
         if (elem.columns)
             children.push(this.renderTableColumns(elem.columns));
-        children.push(...this.renderElements(elem.children));
+        const rows = elem.children ?? [];
+        let headerCount = 0;
+        while (headerCount < rows.length && rows[headerCount].isHeader)
+            headerCount++;
+        if (headerCount > 0)
+            children.push(this.h({ ns: ns.html, tagName: "thead", children: this.renderElements(rows.slice(0, headerCount)) }));
+        children.push(...this.renderElements(rows.slice(headerCount)));
         this.currentVerticalMerge = this.tableVerticalMerges.pop();
         this.currentCellPosition = this.tableCellPositions.pop();
         return this.toHTML(elem, ns.html, "table", children);
@@ -3737,35 +4899,302 @@ section.${c}>footer { z-index: 1; }
         return result;
     }
     renderVmlPicture(elem) {
-        return this.renderContainer(elem, "div");
+        return this.renderContainer(elem, "span");
     }
     renderVmlElement(elem) {
-        var container = this.h({ ns: ns.svg, tagName: "svg", style: elem.cssStyleText });
-        const result = this.renderVmlChildElement(elem);
-        if (elem.imageHref?.id) {
-            this.tasks.push(this.document?.loadDocumentImage(elem.imageHref.id, this.currentPart)
-                .then(x => result.setAttribute("href", x)));
+        if (elem.notDrawn) {
+            const mark = this.h({ tagName: "span" });
+            mark.setAttribute("data-docx-not-drawn", elem.notDrawn);
+            return mark;
         }
-        container.appendChild(result);
-        requestAnimationFrame(() => {
-            const bb = container.firstElementChild.getBBox();
-            container.setAttribute("width", `${Math.ceil(bb.x + bb.width)}`);
-            container.setAttribute("height", `${Math.ceil(bb.y + bb.height)}`);
-        });
-        return container;
+        const box = this.h({ tagName: "span" });
+        if (elem.place) {
+            this.placeInGroup(elem.place, box.style);
+            if (elem.box.hidden)
+                box.style.setProperty("visibility", "hidden");
+        }
+        else {
+            this.placeVmlBox(elem, box.style);
+        }
+        if (elem.group) {
+            box.appendChild(this.renderGroup(elem.group));
+            return box;
+        }
+        const sizeless = !!elem.imageHref && elem.box.width == null && elem.box.height == null;
+        const svg = this.renderShape(box, elem, !sizeless);
+        if (sizeless) {
+            requestAnimationFrame(() => {
+                try {
+                    const bb = svg.firstElementChild.getBBox();
+                    svg.setAttribute("width", `${Math.ceil(bb.x + bb.width)}`);
+                    svg.setAttribute("height", `${Math.ceil(bb.y + bb.height)}`);
+                }
+                catch {
+                }
+            });
+        }
+        return box;
     }
-    renderVmlChildElement(elem) {
-        const result = this.createSvgElement(elem.tagName);
-        Object.entries(elem.attrs).forEach(([k, v]) => result.setAttribute(k, v));
-        for (let child of elem.children) {
-            if (child.type == DomType.VmlElement) {
-                result.appendChild(this.renderVmlChildElement(child));
-            }
-            else {
-                result.appendChild(...asArray(this.renderElement(child)));
-            }
+    renderShape(box, shape, fitted, textColor = null) {
+        if (!shape.imageHref)
+            box.style.setProperty("pointer-events", "none");
+        const svg = this.createSvgElement("svg");
+        if (fitted) {
+            for (const [key, value] of [["position", "absolute"], ["inset", "0"], ["width", "100%"], ["height", "100%"], ["overflow", "visible"]])
+                svg.style.setProperty(key, value);
         }
-        return result;
+        if (shape.viewBox) {
+            svg.setAttribute("viewBox", shape.viewBox);
+            svg.setAttribute("preserveAspectRatio", "none");
+        }
+        if (shape.flip)
+            svg.style.setProperty("transform", shape.flip);
+        for (const part of shape.parts) {
+            const node = this.createSvgElement(part.tagName);
+            Object.entries(part.attrs).forEach(([k, v]) => node.setAttribute(k, v));
+            if (part.tagName == "image" && shape.imageHref?.id) {
+                this.tasks.push(this.document?.loadDocumentImage(shape.imageHref.id, this.currentPart)
+                    .then(x => node.setAttribute("href", x)));
+            }
+            svg.appendChild(node);
+        }
+        box.appendChild(svg);
+        if (shape.textBox) {
+            const text = this.h({ tagName: "div" });
+            const [top, right, bottom, left] = shape.textBox.padding;
+            const textStyle = {
+                "position": "relative", "min-height": "100%", "box-sizing": "border-box",
+                "padding-top": top, "padding-right": right, "padding-bottom": bottom, "padding-left": left,
+                "display": "flex", "flex-direction": "column", "justify-content": shape.textBox.justify,
+                "pointer-events": "auto",
+            };
+            Object.entries(textStyle).forEach(([k, v]) => text.style.setProperty(k, v));
+            if (textColor)
+                text.style.setProperty("color", textColor);
+            this.renderElements(shape.children, text);
+            box.appendChild(text);
+        }
+        return svg;
+    }
+    renderShapeDrawing(elem) {
+        const wrapper = this.h({ tagName: "div" });
+        if (elem.children[0].type == DomType.Group) {
+            const group = elem.children[0];
+            this.placeShapeWrapper(elem.anchor, false, wrapper.style, elem.anchor.width ?? group.width, elem.anchor.height ?? group.height);
+            wrapper.appendChild(this.renderGroup(group));
+            return wrapper;
+        }
+        if (elem.children[0].type == DomType.Image) {
+            this.placeShapeWrapper(elem.anchor, false, wrapper.style, elem.anchor.width ?? 0, elem.anchor.height ?? 0);
+            wrapper.style.removeProperty("pointer-events");
+            wrapper.appendChild(this.renderImage(elem.children[0]));
+            return wrapper;
+        }
+        const shape = elem.children[0];
+        const width = Math.max(0, shape.width ?? elem.anchor.width ?? 0);
+        const height = Math.max(0, shape.height ?? elem.anchor.height ?? 0);
+        if (shape.geometry != "line" && !(width > 0 && height > 0))
+            return null;
+        this.placeShapeWrapper(elem.anchor, shape.autoFit, wrapper.style, elem.anchor.width ?? width, elem.anchor.height ?? height);
+        wrapper.appendChild(this.renderDmlShape(shape, width, height));
+        return wrapper;
+    }
+    renderGroup(group) {
+        const box = this.h({ tagName: "div" });
+        for (const [key, value] of [["display", "block"], ["position", "relative"], ["width", pt(group.width)], ["height", pt(group.height)]])
+            box.style.setProperty(key, value);
+        if (group.place)
+            this.placeInGroup(group.place, box.style);
+        if (group.rotation)
+            box.style.setProperty("transform", `rotate(${formatNumber(group.rotation)}deg)`);
+        this.renderElements(group.children, box);
+        return box;
+    }
+    placeInGroup(place, style) {
+        for (const [key, value] of [["display", "block"], ["position", "absolute"], ["left", place.left], ["top", place.top], ["width", place.width], ["height", place.height]])
+            style.setProperty(key, value);
+        if (place.rotation)
+            style.setProperty("transform", `rotate(${formatNumber(place.rotation)}deg) ${style.transform}`.trim());
+    }
+    renderDmlShape(shape, width = shape.width, height = shape.height) {
+        const theme = this.document?.themePart?.theme;
+        let partial = false;
+        const resolve = (spec, ref) => {
+            const refColor = ref?.color ? resolveColor(ref.color, theme) : null;
+            const fromRef = spec === undefined && ref?.idx > 0 && !!ref.color;
+            if (spec === null || spec === undefined && !fromRef)
+                return null;
+            const color = fromRef ? refColor : resolveColor(spec, theme, refColor);
+            partial || (partial = !color);
+            return color;
+        };
+        const fill = resolve(shape.fill, shape.fillRef);
+        const stroke = resolve(shape.line.fill, shape.lnRef);
+        const text = shape.textBox && shape.fontRef?.color ? resolve(shape.fontRef.color, null) : null;
+        const themeWidth = shape.lnRef?.idx > 0 ? theme?.lineWidths[shape.lnRef.idx - 1] : null;
+        const dashName = shape.line.dash?.toLowerCase().replace(/^lg/, "long").replace(/^sys/, "short");
+        const paint = {
+            fill: fill && formatColor(fill),
+            stroke: stroke && formatColor(stroke),
+            strokeWidth: clamp(shape.line.width ?? (themeWidth != null ? themeWidth / 12700 : 0.75), 0.25, 12),
+            dash: hasOwn(dashPatterns, dashName) ? dashPatterns[dashName] : undefined,
+        };
+        const attrs = (filled) => {
+            const result = paintAttrs(paint, filled, true);
+            if (filled && fill?.alpha < 1)
+                result["fill-opacity"] = formatNumber(fill.alpha);
+            if (stroke?.alpha < 1)
+                result["stroke-opacity"] = formatNumber(stroke.alpha);
+            return result;
+        };
+        const radius = pt(shape.radius * Math.min(width, height));
+        const lineEnd = [width, height].map(v => !(v > 0) ? "0" : shape.place ? formatNumber(v * 4 / 3) : "100%");
+        const parts = [
+            shape.geometry == "ellipse" ? { tagName: "ellipse", attrs: { cx: "50%", cy: "50%", rx: "50%", ry: "50%", ...attrs(true) } }
+                : shape.geometry == "line" ? { tagName: "line", attrs: { x1: "0", y1: "0", x2: lineEnd[0], y2: lineEnd[1], ...attrs(false) } }
+                    : { tagName: "rect", attrs: { width: "100%", height: "100%", ...(shape.geometry == "roundRect" ? { rx: radius, ry: radius } : {}), ...attrs(true) } }
+        ];
+        if (shape.geometry == "line" && paint.stroke) {
+            const ends = [[0, 0], [width, height]];
+            [shape.headEnd, shape.tailEnd].forEach((end, i) => {
+                if (!end || end.type == "none")
+                    return;
+                if (!drawnHeads.has(end.type)) {
+                    partial = true;
+                    return;
+                }
+                const d = arrowHead(ends[i], ends[1 - i], paint.strokeWidth, headScale[end.width] ?? 3, headScale[end.length] ?? 3);
+                const [bx, by] = arrowBase(ends[i], ends[1 - i], paint.strokeWidth, headScale[end.length] ?? 3);
+                Object.assign(parts[0].attrs, i ? { x2: formatNumber(bx), y2: formatNumber(by) } : { x1: formatNumber(bx), y1: formatNumber(by) });
+                const head = { d, fill: paint.stroke, stroke: "none" };
+                if (stroke.alpha < 1)
+                    head["fill-opacity"] = formatNumber(stroke.alpha);
+                parts.push({ tagName: "path", attrs: head });
+            });
+        }
+        if (partial)
+            parts.push({ tagName: "g", attrs: { "data-docx-not-drawn": "partial" } });
+        const box = this.h({ tagName: "span" });
+        const set = (key, value) => box.style.setProperty(key, value);
+        set("display", "block");
+        set("position", "relative");
+        set("width", pt(width));
+        set(shape.autoFit ? "min-height" : "height", pt(height));
+        if (!(width >= 0.75))
+            set("min-width", "1px");
+        if (!(height >= 0.75))
+            set("min-height", "1px");
+        if (shape.rotation)
+            set("transform", `rotate(${formatNumber(shape.rotation)}deg)`);
+        if (shape.place)
+            this.placeInGroup(shape.place, box.style);
+        const flip = shape.flipH || shape.flipV ? `scale(${shape.flipH ? -1 : 1}, ${shape.flipV ? -1 : 1})` : undefined;
+        this.renderShape(box, { parts, flip, textBox: shape.textBox, children: shape.children }, true, text && formatColor(text));
+        return box;
+    }
+    placeShapeWrapper(anchor, autoFit, style, width, height) {
+        const set = (key, value) => style.setProperty(key, value);
+        const floating = !anchor.inline && !anchor.nested;
+        const placed = floating && (anchor.wrap == "wrapNone" || hasOwn(verticalFrames, anchor.v.relative));
+        const float = floating && !placed && ["wrapSquare", "wrapTight", "wrapThrough"].includes(anchor.wrap) ? this.floatSide(anchor.h, width) : null;
+        set("display", floating && !placed ? "block" : "inline-block");
+        set("position", placed ? "absolute" : "relative");
+        set("width", pt(width));
+        set(autoFit ? "min-height" : "height", pt(height));
+        set("text-indent", "0px");
+        set("pointer-events", "none");
+        if (anchor.behindDoc)
+            set("z-index", "-1");
+        if (!floating)
+            return;
+        const left = anchorEdge(anchor.h, horizontalFrames, width);
+        const hStatic = staticOffset(anchor.h, horizontalFrames);
+        if (float) {
+            set("float", float.side);
+            set(float.side == "left" ? "margin-left" : "margin-right", pt(float.margin));
+            set("display", "block");
+        }
+        else if (placed && left != null)
+            set("left", left);
+        else if (left != null)
+            set("margin-left", `calc(${left} - ${marginLeft})`);
+        else if (hStatic)
+            set("margin-left", hStatic);
+        if (!placed) {
+            if (anchor.v.offset != null)
+                set("margin-top", pt(anchor.v.offset));
+            return;
+        }
+        const top = anchorEdge(anchor.v, verticalFrames, height);
+        const vStatic = staticOffset(anchor.v, verticalFrames);
+        if (top == null && vStatic)
+            set("margin-top", vStatic);
+        else if (top != null && this.currentPart instanceof FooterPart)
+            set("bottom", `calc(${pageHeight} - ${top} - ${pt(height)})`);
+        else if (top != null)
+            set("top", top);
+    }
+    floatSide(h, width) {
+        const page = parseFloat(this.currentSectProps?.pageSize?.width);
+        const left = parseFloat(this.currentSectProps?.pageMargins?.left) || 0;
+        const right = parseFloat(this.currentSectProps?.pageMargins?.right) || 0;
+        if (!(page > 0))
+            return null;
+        const column = page - left - right;
+        const frames = {
+            page: [0, page], margin: [left, column], column: [left, column],
+            leftMargin: [0, left], insideMargin: [0, left], rightMargin: [page - right, right], outsideMargin: [page - right, right],
+        };
+        const [start, span] = hasOwn(frames, h.relative) ? frames[h.relative] : [left, column];
+        const share = { left: 0, inside: 0, center: 0.5, right: 1, outside: 1 }[h.align];
+        const x = (h.offset !== undefined || share == null ? start + (h.offset ?? 0) : start + (span - width) * share) - left;
+        return x + width / 2 <= column / 2 ? { side: "left", margin: x } : { side: "right", margin: column - x - width };
+    }
+    placeVmlBox(elem, style) {
+        const box = elem.box;
+        const set = (key, value) => style.setProperty(key, value);
+        set("display", "inline-block");
+        set("position", "relative");
+        if (box.width != null)
+            set("width", pt(box.width));
+        if (box.height != null)
+            set("height", pt(box.height));
+        if (!(box.width >= 0.75))
+            set("min-width", "1px");
+        if (!(box.height >= 0.75))
+            set("min-height", "1px");
+        if (elem.wrapType == "topAndBottom") {
+            set("display", "block");
+            set("margin-left", box.hRelative == "page" ? `calc(${pt(box.x)} - var(--docx-margin-left, 0pt))` : pt(box.x));
+            set("margin-top", pt(box.y));
+        }
+        else if (box.position == "absolute") {
+            set("position", "absolute");
+            const left = vmlEdge(vmlHorizontalFrames, box.hRelative, box.hAlign, box.x, box.width);
+            const top = vmlEdge(vmlVerticalFrames, box.vRelative, box.vAlign, box.y, box.height);
+            if (left == null)
+                set("margin-left", pt(box.x));
+            else
+                set("left", left);
+            if (top == null)
+                set("margin-top", pt(box.y));
+            else if (this.currentPart instanceof FooterPart)
+                set("bottom", `calc(var(--docx-page-height, 100%) - (${top}) - ${pt(box.height ?? 0)})`);
+            else
+                set("top", top);
+        }
+        else {
+            if (box.x)
+                set("margin-left", pt(box.x));
+            if (box.y)
+                set("margin-top", pt(box.y));
+        }
+        if (box.zIndex < 0)
+            set("z-index", "-1");
+        if (box.hidden)
+            set("visibility", "hidden");
+        if (box.rotation)
+            set("transform", `rotate(${box.rotation}deg)`);
     }
     renderMmlRadical(elem) {
         const base = elem.children.find(el => el.type == DomType.MmlBase);
@@ -3930,12 +5359,7 @@ section.${c}>footer { z-index: 1; }
     refreshTabStops() {
         if (!this.options.experimental)
             return;
-        setTimeout(() => {
-            const pixelToPoint = computePixelToPoint();
-            for (let tab of this.currentTabs) {
-                updateTabStop(tab.span, tab.stops, this.defaultTabSize, pixelToPoint);
-            }
-        }, 500);
+        setTimeout(() => measureTabSpans(this.currentTabs), 500);
     }
     createElementNS(ns, tagName, props, children) {
         return this.h({ ns, tagName, children, ...props });
@@ -3959,6 +5383,438 @@ function findParent(elem, type) {
         parent = parent.parent;
     return parent;
 }
+function anchorEdge(axis, frames, extent) {
+    if (!hasOwn(frames, axis.relative))
+        return null;
+    const [base, span] = frames[axis.relative];
+    if (axis.offset !== undefined)
+        return axis.offset == null ? null : `calc(${base} + ${pt(axis.offset)})`;
+    switch (axis.align) {
+        case "left":
+        case "top": return `calc(${base})`;
+        case "center": return `calc(${base} + (${span} - ${pt(extent)}) / 2)`;
+        case "right":
+        case "bottom": return `calc(${base} + ${span} - ${pt(extent)})`;
+    }
+    return null;
+}
+function staticOffset(axis, frames) {
+    return !hasOwn(frames, axis.relative) && axis.offset != null ? pt(axis.offset) : null;
+}
+
+const MAX_PAGES = 2000;
+const MIN_SPLIT_HEIGHT = 24;
+function paginate(root, className = "docx", options) {
+    const deadline = options?.budgetMs === undefined ? Infinity : performance.now() + options.budgetMs;
+    const pages = Array.from(root.querySelectorAll(`section.${className}`));
+    const savedCounts = new Map(Array.from(root.querySelectorAll('[data-docx-field="NUMPAGES"]')).map((f) => [f, f.textContent]));
+    let done = splitPages(pages, className, deadline);
+    if (fillPages(pages, done)) {
+        const count = pages.length;
+        done = splitPages(pages, className, deadline) && done;
+        if (!done)
+            restoreCounts(pages, savedCounts);
+        if (pages.length != count)
+            fillPages(pages, done);
+    }
+    remeasureTabStops(root, className);
+    return done;
+}
+function splitPages(pages, className, deadline) {
+    let number = 0;
+    for (let i = 0; i < pages.length; i++) {
+        if (pages.length >= MAX_PAGES || performance.now() >= deadline)
+            return false;
+        [number] = pageNumber(pages[i], number);
+        showHeaderFooter(pages[i], number);
+        const next = splitPage(pages[i], className, number + 1);
+        if (next)
+            pages.splice(i + 1, 0, next);
+    }
+    return true;
+}
+function pageNumber(page, previous) {
+    const start = page.getAttribute("data-page-start");
+    const number = start === null ? previous + 1 : Number(start);
+    const parity = page.getAttribute("data-page-parity");
+    const blank = !!parity && (number % 2 == 0) != (parity == "even");
+    return [blank ? number + 1 : number, blank];
+}
+function formatPageNumber(number, format) {
+    const letter = (base) => String.fromCharCode(base + (number - 1) % 26).repeat(Math.ceil(number / 26));
+    switch (format) {
+        case null: return String(number);
+        case "upperRoman": return roman(number);
+        case "lowerRoman": return roman(number).toLowerCase();
+        case "upperLetter": return number > 0 ? letter(65) : null;
+        case "lowerLetter": return number > 0 ? letter(97) : null;
+        default: return null;
+    }
+}
+function roman(number) {
+    if (!(number > 0 && number < 4000))
+        return String(number);
+    const digits = [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]];
+    let result = "";
+    for (const [value, text] of digits)
+        for (; number >= value; number -= value)
+            result += text;
+    return result;
+}
+function fillPages(pages, withCount) {
+    let number = 0;
+    let changed = false;
+    const fill = (field, text) => {
+        const before = field.textContent.length;
+        return setFieldText(field, text) && before != text.length;
+    };
+    const numbers = pages.map(page => {
+        const [value, blank] = pageNumber(page, number);
+        number = value;
+        return { value, blank };
+    });
+    const count = String(pages.length + numbers.filter(n => n.blank).length);
+    pages.forEach((page, i) => {
+        const text = formatPageNumber(numbers[i].value, page.getAttribute("data-page-format"));
+        if (text != null)
+            fields(page, "PAGE").forEach(f => changed = fill(f, text) || changed);
+        if (withCount)
+            fields(page, "NUMPAGES").forEach(f => changed = fill(f, count) || changed);
+        showHeaderFooter(page, numbers[i].value);
+    });
+    return changed;
+}
+function restoreCounts(pages, saved) {
+    let previous = [];
+    for (const page of pages) {
+        previous = fields(page, "NUMPAGES").map((f, i) => {
+            const text = saved.get(f) ?? previous[i];
+            text != null && setFieldText(f, text);
+            return text;
+        });
+    }
+}
+function fields(page, field) {
+    return Array.from(page.querySelectorAll(`[data-docx-field="${field}"]`));
+}
+function setFieldText(field, text) {
+    const before = field.textContent;
+    const walker = document.createTreeWalker(field, NodeFilter.SHOW_TEXT);
+    let first = true;
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        n.data = first ? text : "";
+        first = false;
+    }
+    if (first)
+        (field.firstElementChild ?? field).appendChild(document.createTextNode(text));
+    return field.textContent != before;
+}
+function splitPage(page, className = "docx", nextNumber) {
+    const children = Array.from(page.children);
+    const articles = children.filter(c => c.tagName === "ARTICLE");
+    if (!articles.length)
+        return null;
+    const style = getComputedStyle(page);
+    const pageHeight = parseFloat(style.minHeight);
+    if (!pageHeight)
+        return null;
+    const footer = children.find(c => c.tagName === "FOOTER" && getComputedStyle(c).display !== "none");
+    const below = footer ? outerHeight(footer) : 0;
+    const limitY = page.getBoundingClientRect().top + pageHeight - (parseFloat(style.paddingBottom) || 0) - below + 0.5;
+    const pageSpace = limitY - articles[0].getBoundingClientRect().top;
+    if (pageSpace < MIN_SPLIT_HEIGHT)
+        return null;
+    const footnotes = children.find(c => c.tagName === "OL" && c.dataset.docxNotes === "footnotes");
+    const items = footnotes ? Array.from(footnotes.children) : [];
+    const refs = footnotes ? articles.flatMap(a => Array.from(a.querySelectorAll("sup[data-docx-footnote]"))) : [];
+    let keptNotes = items.length;
+    let notesLimit = limitY;
+    if (items.length && refs.length) {
+        const chrome = outerHeight(footnotes) - (items[items.length - 1].getBoundingClientRect().bottom - items[0].getBoundingClientRect().top);
+        keptNotes = 0;
+        for (let k = Math.min(items.length, refs.length); k > 0; k--) {
+            const limit = limitY - chrome - (items[k - 1].getBoundingClientRect().bottom - items[0].getBoundingClientRect().top);
+            if (limit - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT && refs.filter(r => r.getBoundingClientRect().bottom <= limit).length >= k) {
+                keptNotes = k;
+                notesLimit = limit;
+                break;
+            }
+        }
+    }
+    else if (items.length && limitY - outerHeight(footnotes) - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT) {
+        notesLimit = limitY - outerHeight(footnotes);
+    }
+    const flow = [
+        ...articles.flatMap(article => Array.from(article.children).map(block => ({ block, article }))),
+        ...children.filter(c => c.tagName === "OL" && c !== footnotes).map(block => ({ block, article: null })),
+    ];
+    const last = flow[flow.length - 1].block;
+    const end = (block) => block.getBoundingClientRect().bottom + (block === last ? parseFloat(getComputedStyle(block).marginBottom) || 0 : 0);
+    const bodyEnd = notesLimit;
+    let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > bodyEnd);
+    let splitLimit = bodyEnd;
+    let keepNotes = false;
+    if (over > 0 && !flow[over].article && flow[over - 1].article) {
+        const bodyLimit = limitY - (end(last) - flow[over - 1].block.getBoundingClientRect().bottom);
+        const bodyOver = flow.findIndex(f => f.article && !isBlank(f.block) && f.block.getBoundingClientRect().bottom > bodyLimit);
+        if (bodyOver > 0 && bodyLimit - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT) {
+            over = bodyOver;
+            splitLimit = bodyLimit;
+            keepNotes = true;
+        }
+    }
+    if (over < 0 && keptNotes == items.length) {
+        hideBlankOverflow(flow, limitY);
+        return null;
+    }
+    const overArticle = over < 0 ? null : flow[over].article;
+    let cut = over < 0 ? flow.length : over;
+    let carry = null;
+    if (over >= 0 && flow[over].block.tagName === "TABLE")
+        carry = splitTable(flow[over].block, splitLimit);
+    else if (over >= 0 && flow[over].block.tagName === "P")
+        carry = splitParagraph(flow[over].block, splitLimit, className);
+    const stays = over >= 0 && !carry && unbreakableHeight(flow[over].block) > Math.max(pageSpace, pageSpace + headerFooterSaving(children, nextNumber));
+    if (carry || stays) {
+        cut = over + 1;
+    }
+    else if (over >= 0) {
+        while (cut > 0 && flow[cut - 1].article === overArticle && overArticle && getComputedStyle(flow[cut - 1].block).breakAfter === "avoid")
+            cut--;
+        if (cut === 0)
+            cut = over || 1;
+    }
+    if (!carry && keptNotes == items.length && flow.slice(cut).every(f => f.article ? isBlank(f.block) : stays)) {
+        hideBlankOverflow(flow, limitY);
+        return null;
+    }
+    const moved = new Map();
+    const notes = [];
+    if (carry)
+        moved.set(overArticle, [carry]);
+    for (const f of flow.slice(cut)) {
+        if (f.article)
+            moved.set(f.article, [...(moved.get(f.article) ?? []), f.block]);
+        else if (!keepNotes)
+            notes.push(f.block);
+    }
+    const next = page.cloneNode(false);
+    next.removeAttribute("data-docx-first-page");
+    next.removeAttribute("data-page-start");
+    next.removeAttribute("data-page-parity");
+    for (const c of children) {
+        if (c.tagName === "HEADER" && c.dataset.docxHf !== "first")
+            next.appendChild(cloneWithTabStops(c));
+    }
+    for (const [article, blocks] of moved) {
+        if (article !== overArticle || !carry && blocks[0] === article.firstElementChild) {
+            next.appendChild(article);
+        }
+        else {
+            const rest = article.cloneNode(false);
+            rest.append(...blocks);
+            next.appendChild(rest);
+        }
+    }
+    if (keptNotes < items.length) {
+        const rest = keptNotes ? footnotes.cloneNode(false) : footnotes;
+        if (keptNotes) {
+            rest.setAttribute("start", String(Number(footnotes.getAttribute("start") ?? 1) + keptNotes));
+            rest.append(...items.slice(keptNotes));
+        }
+        next.appendChild(rest);
+    }
+    next.append(...notes);
+    for (const c of children) {
+        if (c.tagName === "FOOTER" && c.dataset.docxHf !== "first")
+            next.appendChild(cloneWithTabStops(c));
+    }
+    page.after(next);
+    return next;
+}
+function showHeaderFooter(page, number) {
+    for (const tag of ["HEADER", "FOOTER"]) {
+        const alternates = Array.from(page.children).filter(c => c.tagName === tag && c.dataset.docxHf);
+        const find = (type) => alternates.find(c => c.dataset.docxHf === type);
+        const pick = (page.hasAttribute("data-docx-first-page") ? find("first") : null)
+            ?? (number % 2 == 0 ? find("even") : null)
+            ?? find("default");
+        if (!pick)
+            continue;
+        for (const c of alternates) {
+            if ((c === pick) === (c.style.display === "none"))
+                c.style.display = c === pick ? "" : "none";
+        }
+    }
+}
+function headerFooterSaving(children, nextNumber) {
+    let saving = 0;
+    for (const tag of ["HEADER", "FOOTER"]) {
+        const shown = children.find(c => c.tagName === tag && getComputedStyle(c).display !== "none");
+        const next = children.filter(c => c.tagName === tag && c.dataset.docxHf !== "first");
+        const find = (type) => next.find(c => c.dataset.docxHf === type);
+        const pick = nextNumber == null ? null : (nextNumber % 2 == 0 ? find("even") : null) ?? find("default");
+        const height = pick ? shownHeight(pick) : next.length ? Math.min(...next.map(shownHeight)) : 0;
+        saving += (shown ? outerHeight(shown) : 0) - height;
+    }
+    return saving;
+}
+function shownHeight(el) {
+    if (el.style.display !== "none")
+        return outerHeight(el);
+    el.style.display = "";
+    const height = outerHeight(el);
+    el.style.display = "none";
+    return height;
+}
+function hideBlankOverflow(flow, limitY) {
+    for (const f of flow) {
+        if (f.article && isBlank(f.block) && f.block.getBoundingClientRect().bottom > limitY)
+            f.block.style.display = "none";
+    }
+}
+function unbreakableHeight(block) {
+    if (block instanceof HTMLTableElement) {
+        const first = Array.from(block.rows).find(r => r.parentElement !== block.tHead);
+        return first ? first.getBoundingClientRect().bottom - block.getBoundingClientRect().top : 0;
+    }
+    if (block.tagName === "P" && getComputedStyle(block).breakInside !== "avoid")
+        return 0;
+    return outerHeight(block);
+}
+function outerHeight(el) {
+    const style = getComputedStyle(el);
+    return el.getBoundingClientRect().height + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
+}
+function splitTable(table, limitY) {
+    const head = table.tHead;
+    const rows = Array.from(table.rows).filter(r => r.parentElement !== head);
+    const at = rows.findIndex(r => r.getBoundingClientRect().bottom > limitY);
+    if (at <= 0)
+        return null;
+    const rest = table.cloneNode(false);
+    for (const c of Array.from(table.children)) {
+        if (c.tagName === "COLGROUP") {
+            rest.appendChild(c.cloneNode(true));
+        }
+        else if (c === head) {
+            const copy = cloneWithTabStops(head);
+            copy.setAttribute("data-docx-repeat", "");
+            clampRowSpans(Array.from(copy.rows), copy.rows.length);
+            rest.appendChild(copy);
+        }
+    }
+    const first = rows[at];
+    for (const { row, cell, column, span } of clampRowSpans(rows.slice(0, at), at)) {
+        const continued = cellAtColumn(first, column);
+        if (continued?.style.display === "none") {
+            continued.style.cssText = cell.style.cssText;
+            continued.rowSpan = span - (at - row);
+        }
+    }
+    for (const r of rows.slice(at))
+        rest.appendChild(r);
+    return rest;
+}
+function splitParagraph(p, limitY, className = "docx") {
+    if (getComputedStyle(p).breakInside === "avoid")
+        return null;
+    const lines = paragraphLines(p);
+    let keep = lines.filter(l => l.bottom <= limitY).length;
+    if (lines.length - keep < 2)
+        keep = lines.length - 2;
+    if (keep < 2)
+        return null;
+    const at = textPositionAt(p, lines[keep].top - 1);
+    if (!at)
+        return null;
+    const range = document.createRange();
+    range.setStart(at.node, at.offset);
+    range.setEnd(p, p.childNodes.length);
+    const rest = p.cloneNode(false);
+    rest.removeAttribute("id");
+    rest.appendChild(range.extractContents());
+    p.style.marginBottom = "0";
+    rest.style.marginTop = "0";
+    rest.style.textIndent = "0";
+    rest.classList.add(`${className}-continued`);
+    p.after(rest);
+    return rest;
+}
+function clampRowSpans(rows, end) {
+    const clamped = [];
+    rows.forEach((row, i) => {
+        let column = 0;
+        for (const cell of Array.from(row.cells)) {
+            if (cell.style.display !== "none" && i + cell.rowSpan > end) {
+                clamped.push({ row: i, cell, column, span: cell.rowSpan });
+                cell.rowSpan = end - i;
+            }
+            column += cell.colSpan;
+        }
+    });
+    return clamped;
+}
+function cellAtColumn(row, column) {
+    let at = 0;
+    for (const cell of Array.from(row.cells)) {
+        if (at === column)
+            return cell;
+        at += cell.colSpan;
+    }
+    return null;
+}
+function paragraphLines(p) {
+    const range = document.createRange();
+    const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+    const rects = [];
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        range.selectNodeContents(n);
+        rects.push(...Array.from(range.getClientRects()));
+    }
+    const lines = [];
+    for (const r of rects) {
+        if (!r.width && !r.height)
+            continue;
+        const line = lines.find(l => Math.abs(l.top - r.top) < 2 || (r.top < l.bottom - 2 && r.bottom > l.top + 2));
+        if (line) {
+            line.top = Math.min(line.top, r.top);
+            line.bottom = Math.max(line.bottom, r.bottom);
+        }
+        else {
+            lines.push({ top: r.top, bottom: r.bottom });
+        }
+    }
+    return lines.sort((a, b) => a.top - b.top);
+}
+function textPositionAt(p, y) {
+    const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    const topOf = (node, offset) => {
+        range.setStart(node, offset);
+        range.setEnd(node, offset + 1);
+        const rects = range.getClientRects();
+        return rects.length ? rects[0].top : -Infinity;
+    };
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        if (!n.length || topOf(n, n.length - 1) < y)
+            continue;
+        let lo = 0;
+        let hi = n.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (topOf(n, mid) >= y)
+                hi = mid;
+            else
+                lo = mid + 1;
+        }
+        return { node: n, offset: lo };
+    }
+    return null;
+}
+function isBlank(el) {
+    return !el.textContent.trim() && !el.querySelector("img, svg, table, canvas, image, div");
+}
 
 const defaultOptions = {
     ignoreHeight: false,
@@ -3980,6 +5836,7 @@ const defaultOptions = {
     renderChanges: false,
     renderComments: false,
     renderAltChunks: true,
+    paginate: false,
     h: h
 };
 function parseAsync(data, userOptions) {
@@ -4001,8 +5858,13 @@ async function renderAsync(data, bodyContainer, styleContainer, userOptions) {
         const c = n.nodeName === "STYLE" ? styleContainer : bodyContainer;
         c.appendChild(n);
     }
+    const ops = { ...defaultOptions, ...userOptions };
+    if (ops.paginate && bodyContainer.isConnected) {
+        await document.fonts?.ready;
+        paginate(bodyContainer, ops.className);
+    }
     return doc;
 }
 
-export { defaultOptions, parseAsync, renderAsync, renderDocument };
+export { defaultOptions, paginate, parseAsync, remeasureTabStops, renderAsync, renderDocument };
 //# sourceMappingURL=docx-preview.mjs.map
