@@ -13,6 +13,13 @@
   const pageBreak = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
   const part = (tag, text) => `<w:${tag} ${NS}>${para(text)}</w:${tag}>`;
 
+  const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+  const EMU = 12700;
+  const picture = (w, h) => `<w:p><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="${w * EMU}" cy="${h * EMU}"/><wp:docPr id="1" name="p"/>`
+    + `<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">`
+    + `<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name=""/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdPic"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>`
+    + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${w * EMU}" cy="${h * EMU}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+
   function build(body, footnotes = null, firstHeaderLines = 0) {
     const zip = new JSZip();
     zip.file("_rels/.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="' + REL + 'officeDocument" Target="word/document.xml"/></Relationships>');
@@ -21,7 +28,9 @@
     zip.file("word/_rels/document.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
       + `<Relationship Id="rIdH" Type="${REL}header" Target="header1.xml"/><Relationship Id="rIdF" Type="${REL}footer" Target="footer1.xml"/>`
       + (footnotes ? `<Relationship Id="rIdN" Type="${REL}footnotes" Target="footnotes.xml"/>` : "")
-      + (firstHeaderLines ? `<Relationship Id="rIdHF" Type="${REL}header" Target="header2.xml"/>` : "") + '</Relationships>');
+      + (firstHeaderLines ? `<Relationship Id="rIdHF" Type="${REL}header" Target="header2.xml"/>` : "")
+      + `<Relationship Id="rIdPic" Type="${REL}image" Target="media/p.png"/></Relationships>`);
+    zip.file("word/media/p.png", PNG, { base64: true });
     if (firstHeaderLines)
       zip.file("word/header2.xml", `<w:hdr ${NS}>${paras(firstHeaderLines, "Letterhead")}</w:hdr>`);
     if (footnotes)
@@ -69,6 +78,16 @@
       expect(pages.length).toBe(2);
       expect(tall.closest("section.docx")).toBe(pages[1]);
       expect(pages[1].getBoundingClientRect().height).toBeLessThanOrEqual(parseFloat(getComputedStyle(pages[1]).minHeight) + 1);
+    });
+
+    it("moves a picture-only paragraph taller than a page to a new page", async () => {
+      div = document.createElement("div");
+      document.body.appendChild(div);
+      await docx.renderAsync(await build(para("Title") + picture(300, 700)), div, null, { ignoreLastRenderedPageBreak: true, experimental: true, paginate: true });
+
+      const pages = Array.from(div.querySelectorAll("section.docx"));
+      expect(pages.length).toBe(2);
+      expect(div.querySelector("article img").closest("section.docx")).toBe(pages[1]);
     });
 
     it("keeps the notes on the page of a tall block that stays where it starts", async () => {
