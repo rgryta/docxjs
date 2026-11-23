@@ -18,5 +18,7 @@ describe("extended-props", function () {
         expect(docParsed.extendedPropsPart.paragraphs == 1);
         expect(docParsed.extendedPropsPart.template == "Normal.dotm");
         expect(docParsed.extendedPropsPart.words == 68);
+
+        div.remove();
     })
 })
