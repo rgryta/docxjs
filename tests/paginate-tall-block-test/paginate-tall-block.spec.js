@@ -13,13 +13,17 @@
   const pageBreak = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
   const part = (tag, text) => `<w:${tag} ${NS}>${para(text)}</w:${tag}>`;
 
-  function build(body, footnotes = null) {
+  function build(body, footnotes = null, firstHeaderLines = 0) {
     const zip = new JSZip();
     zip.file("_rels/.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="' + REL + 'officeDocument" Target="word/document.xml"/></Relationships>');
-    zip.file("word/document.xml", `<w:document ${NS}><w:body>${body}<w:sectPr>${LANDSCAPE}</w:sectPr></w:body></w:document>`);
+    const titlePage = firstHeaderLines ? '<w:headerReference w:type="first" r:id="rIdHF"/><w:titlePg/>' : "";
+    zip.file("word/document.xml", `<w:document ${NS}><w:body>${body}<w:sectPr>${LANDSCAPE}${titlePage}</w:sectPr></w:body></w:document>`);
     zip.file("word/_rels/document.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
       + `<Relationship Id="rIdH" Type="${REL}header" Target="header1.xml"/><Relationship Id="rIdF" Type="${REL}footer" Target="footer1.xml"/>`
-      + (footnotes ? `<Relationship Id="rIdN" Type="${REL}footnotes" Target="footnotes.xml"/>` : "") + '</Relationships>');
+      + (footnotes ? `<Relationship Id="rIdN" Type="${REL}footnotes" Target="footnotes.xml"/>` : "")
+      + (firstHeaderLines ? `<Relationship Id="rIdHF" Type="${REL}header" Target="header2.xml"/>` : "") + '</Relationships>');
+    if (firstHeaderLines)
+      zip.file("word/header2.xml", `<w:hdr ${NS}>${paras(firstHeaderLines, "Letterhead")}</w:hdr>`);
     if (footnotes)
       zip.file("word/footnotes.xml", `<w:footnotes ${NS}><w:footnote w:id="1">${para(footnotes)}</w:footnote></w:footnotes>`);
     zip.file("word/header1.xml", part("hdr", "Header"));
@@ -51,6 +55,20 @@
       expect(tall.closest("section.docx")).toBe(pages[0]);
       expect(pages.length).toBe(2);
       expect(pages[1].textContent).toContain("Second page");
+    });
+
+    it("moves a block that only the next page can hold, under a tall first-page header", async () => {
+      const body = para("Title") + table(row(paras(26, "line"), para("b"), para("c")));
+
+      div = document.createElement("div");
+      document.body.appendChild(div);
+      await docx.renderAsync(await build(body, null, 15), div, null, { ignoreLastRenderedPageBreak: true, experimental: true, paginate: true });
+
+      const pages = Array.from(div.querySelectorAll("section.docx"));
+      const tall = div.querySelector("article > table");
+      expect(pages.length).toBe(2);
+      expect(tall.closest("section.docx")).toBe(pages[1]);
+      expect(pages[1].getBoundingClientRect().height).toBeLessThanOrEqual(parseFloat(getComputedStyle(pages[1]).minHeight) + 1);
     });
 
     it("keeps the notes on the page of a tall block that stays where it starts", async () => {

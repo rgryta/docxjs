@@ -256,7 +256,7 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	else if (over >= 0 && flow[over].block.tagName === "P")
 		carry = splitParagraph(flow[over].block, splitLimit, className);
 
-	const stays = over >= 0 && !carry && unbreakableHeight(flow[over].block) > pageSpace;
+	const stays = over >= 0 && !carry && unbreakableHeight(flow[over].block) > Math.max(pageSpace, pageSpace + headerFooterSaving(children));
 
 	if (carry || stays) {
 		cut = over + 1;  // a block that cannot split and is taller than a page would overflow the next page too
@@ -346,6 +346,33 @@ function showHeaderFooter(page: HTMLElement, number: number) {
 				c.style.display = c === pick ? "" : "none";
 		}
 	}
+}
+
+/**
+ * How much more room a page split off this one has: it shows the shortest alternate header and footer
+ * other than the first-page ones, so a tall letterhead on the first page leaves more space on the next.
+ */
+function headerFooterSaving(children: HTMLElement[]): number {
+	let saving = 0;
+
+	for (const tag of ["HEADER", "FOOTER"]) {
+		const shown = children.find(c => c.tagName === tag && getComputedStyle(c).display !== "none");
+		const next = children.filter(c => c.tagName === tag && c.dataset.docxHf !== "first");
+		saving += (shown ? outerHeight(shown) : 0) - (next.length ? Math.min(...next.map(shownHeight)) : 0);
+	}
+
+	return saving;
+}
+
+/** Outer height of a header or footer as if shown; a hidden alternate is shown just long enough to measure it. */
+function shownHeight(el: HTMLElement): number {
+	if (el.style.display !== "none")
+		return outerHeight(el);
+
+	el.style.display = "";
+	const height = outerHeight(el);
+	el.style.display = "none";
+	return height;
 }
 
 function hideBlankOverflow(flow: { block: HTMLElement, article: HTMLElement }[], limitY: number) {
