@@ -80,6 +80,7 @@ describe("DrawingML shapes", function () {
       `<w:r><w:t xml:space="preserve">${"words that wrap beside the shape ".repeat(12)}</w:t></w:r>`),
     para("case-float-left", run(anchor({ h: posH("margin", align("left")), v: posV("paragraph", offset(0)), w: 40, ht: 30, wrap: '<wp:wrapSquare wrapText="bothSides"/>' }, shapeGraphic(wsp({ w: 40, h: 30 })))),
       `<w:r><w:t xml:space="preserve">${"words that wrap beside the shape ".repeat(12)}</w:t></w:r>`),
+    para("case-rtl", run(anchor({ h: posH("margin", offset(50)), v: posV("paragraph", offset(0)), wrap: "<wp:wrapTopAndBottom/>" }, shapeGraphic(wsp())))).replace("<w:p>", "<w:p><w:pPr><w:bidi/></w:pPr>"),
     para("case-square-page", run(anchor({ h: posH("page", offset(72)), v: posV("page", offset(200)), wrap: '<wp:wrapSquare wrapText="bothSides"/>' }, shapeGraphic(wsp())))),
     para("case-pic-behind", run(anchor({ h: posH("page", offset(72)), v: posV("paragraph", offset(0)), behind: 1 }, picture))),
     para("case-choice-empty", run(alternate('<mc:Choice Requires="wps"/>', ovalFallback))),
@@ -222,6 +223,11 @@ ${content}
     const beside = textBeside("case-float-left", box);
     expect(beside.length).toBeGreaterThan(0);
     beside.forEach(r => expect(r.left).toBeGreaterThanOrEqual(box.right - 1));
+  });
+
+  it("offsets a top-and-bottom shape from the left in a right-to-left paragraph", () => {
+    const wrapper = wrapperOf("case-rtl");
+    expectNear(rect(wrapper).left - rect(wrapper.closest("article")).left, 50 * 4 / 3);
   });
 
   it("places a square-wrapped shape anchored to the page on the page, out of the text flow", () => {
