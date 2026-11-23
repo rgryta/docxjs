@@ -49,5 +49,25 @@
       expect(pages.length).toBe(2);
       expect(pages[1].textContent).toContain("Second page");
     });
+
+    it("keeps a paragraph with keep-lines taller than a page where it starts, even after earlier text", async () => {
+      const lines = '<w:r><w:t>tall</w:t></w:r>' + '<w:r><w:br/><w:t>line</w:t></w:r>'.repeat(70);
+      const body = para("Title") + para("Subtitle") + `<w:p><w:pPr><w:keepLines/></w:pPr>${lines}</w:p>`
+        + pageBreak + para("Second page");
+
+      div = document.createElement("div");
+      document.body.appendChild(div);
+      await docx.renderAsync(await build(body), div, null, { ignoreLastRenderedPageBreak: true, experimental: true });
+
+      const tall = Array.from(div.querySelectorAll("article > p")).find(p => p.textContent.startsWith("tall"));
+      const page = tall.closest("section.docx");
+      expect(tall.getBoundingClientRect().height).toBeGreaterThan(parseFloat(getComputedStyle(page).minHeight));
+
+      expect(docx.paginate(div, "docx", { budgetMs: 1000 })).toBe(true);
+
+      const pages = Array.from(div.querySelectorAll("section.docx"));
+      expect(tall.closest("section.docx")).toBe(pages[0]);
+      expect(pages.length).toBe(2);
+    });
   });
 })();
