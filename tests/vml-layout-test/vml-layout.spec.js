@@ -265,6 +265,11 @@ ${body}
     other.remove();
   });
 
+  it("keeps clicks on a VML picture but lets them through a drawn shape", () => {
+    expect(getComputedStyle(paragraph("case-picture-no-type").querySelector("svg").parentElement).pointerEvents).not.toBe("none");
+    expect(getComputedStyle(shapeBox("case-h-page")).pointerEvents).toBe("none");
+  });
+
   it("does not mark a picture shape whose shape type is missing", () => {
     const reasons = Array.from(paragraph("case-picture-no-type").querySelectorAll("[data-docx-not-drawn]")).map(e => e.getAttribute("data-docx-not-drawn"));
     expect(reasons).not.toContain("vml-type");
