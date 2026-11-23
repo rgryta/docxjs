@@ -61,6 +61,11 @@ ${block("first")}${block("second")}${block("third", noExtent)}
     afterAll(() => container.remove());
 
     const MARGIN = 96;
+    it("keeps clicks on an anchored picture", () => {
+      const picture = container.querySelector("article img").parentElement;
+      expect(getComputedStyle(picture).pointerEvents).not.toBe("none");
+    });
+
     it("renders an anchored picture that has no extent", () => {
       expect(Array.from(container.querySelectorAll("article p")).some(p => p.textContent.startsWith("third "))).toBe(true);
     });
