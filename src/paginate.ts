@@ -159,6 +159,9 @@ function setFieldText(field: HTMLElement, text: string): boolean {
 		first = false;
 	}
 
+	if (first)
+		(field.firstElementChild ?? field).appendChild(document.createTextNode(text));
+
 	return field.textContent != before;
 }
 
