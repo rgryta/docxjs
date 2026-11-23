@@ -3,6 +3,7 @@ import { XmlParser } from "../parser/xml-parser";
 export class DmlTheme {
     colorScheme: DmlColorScheme;
     fontScheme: DmlFontScheme;
+    lineWidths: number[] = [];
 }
 
 export interface DmlColorScheme {
@@ -30,6 +31,7 @@ export function parseTheme(elem: Element, xml: XmlParser) {
         switch(el.localName) {
             case "clrScheme": result.colorScheme = parseColorScheme(el, xml); break;
             case "fontScheme": result.fontScheme = parseFontScheme(el, xml); break;
+            case "fmtScheme": result.lineWidths = parseLineWidths(el, xml); break;
         }
     }
 
@@ -55,6 +57,12 @@ export function parseColorScheme(elem: Element, xml: XmlParser) {
     }
 
     return result;
+}
+
+function parseLineWidths(elem: Element, xml: XmlParser): number[] {
+    const list = xml.element(elem, "lnStyleLst");
+    const width = (ln: Element) => xml.attr(ln, "w");
+    return list ? xml.elements(list, "ln").map(ln => /^\d{1,12}$/.test(width(ln) ?? "") ? parseInt(width(ln)) : null) : [];
 }
 
 export function parseFontScheme(elem: Element, xml: XmlParser) {
