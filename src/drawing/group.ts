@@ -1,3 +1,4 @@
+import { strictInteger } from '../utils';
 import { DomType, OpenXmlElementBase } from '../document/dom';
 
 const maxPercent = 1e6;
@@ -66,7 +67,7 @@ export function integerPair(text: string, fallback: number[]): number[] {
 	const parts = text.split(",");
 	return fallback.map((value, i) => {
 		const part = parts[i]?.trim();
-		return !part ? value : /^-?\d+$/.test(part) ? parseInt(part) : NaN;
+		return !part ? value : strictInteger(part);
 	});
 }
 
