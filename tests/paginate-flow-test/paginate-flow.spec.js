@@ -229,6 +229,33 @@
       }
     });
 
+    it("keeps footnotes with their references when endnotes share the last page", async () => {
+      const notes = [
+        { id: "rIdN", type: "footnotes", target: "footnotes.xml", content: `<w:footnotes ${NS}><w:footnote w:id="1">${para("Foot")}${para("Second foot line")}</w:footnote></w:footnotes>` },
+        { id: "rIdE", type: "endnotes", target: "endnotes.xml", content: `<w:endnotes ${NS}><w:endnote w:id="1">${para("End")}${para("Second end line")}</w:endnote></w:endnotes>` },
+      ];
+
+      for (let count = 12; count <= 50; count++) {
+        div?.remove();
+        div = await render({
+          body: paras(count, 1) + `<w:p>${run("Last")}<w:r><w:footnoteReference w:id="1"/></w:r>${run("line")}<w:r><w:endnoteReference w:id="1"/></w:r></w:p>`,
+          parts: notes,
+        });
+        const onePage = fits(pages(div)[0]);
+
+        docx.paginate(div);
+
+        if (onePage)
+          expect(pages(div).length).withContext(`${count} paragraphs`).toBe(1);
+
+        for (const page of pages(div)) {
+          const list = page.querySelector(':scope > ol[data-docx-notes="footnotes"]');
+          expect(list ? list.children.length : 0).withContext(`${count} paragraphs`).toBe(page.querySelectorAll("sup[data-docx-footnote]").length);
+          expect(fits(page)).withContext(`${count} paragraphs`).toBe(true);
+        }
+      }
+    });
+
     it("counts the notes list's bottom margin as part of the page", async () => {
       for (let count = 20; count <= 40; count += 2) {
         div?.remove();
