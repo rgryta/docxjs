@@ -364,6 +364,9 @@ const namedColors = new Set(("aliceblue antiquewhite aqua aquamarine azure beige
 	"seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal " +
 	"thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen").split(" "));
 
+// Windows system colours Word writes for default fills and lines
+const systemColors = new Map([["window", "white"], ["windowtext", "black"]]);
+
 export function vmlColor(value: string): string {
 	const color = value?.replace(/\s*\[\d+\]\s*$/, "").trim().toLowerCase();
 
@@ -372,6 +375,9 @@ export function vmlColor(value: string): string {
 
 	if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/.test(color) || namedColors.has(color))
 		return color;
+
+	if (systemColors.has(color))
+		return systemColors.get(color);
 
 	const rgb = /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/.exec(color);
 
