@@ -146,7 +146,7 @@ export function parseVmlElement(elem: Element, parser: DocumentParser, watermark
 			return notDrawn("group-child");
 
 		result.place = mapped.place;
-		result.box = { placed: false, x: 0, y: 0, width: mapped.width, height: mapped.height, hidden: result.box.hidden };
+		result.box = { x: 0, y: 0, width: mapped.width, height: mapped.height, hidden: result.box.hidden };
 	}
 
 	const imageId = imageData && xml.attr(imageData, "id");
