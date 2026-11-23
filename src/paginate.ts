@@ -256,7 +256,9 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	else if (over >= 0 && flow[over].block.tagName === "P")
 		carry = splitParagraph(flow[over].block, splitLimit, className);
 
-	if (carry || over >= 0 && unbreakableHeight(flow[over].block) > pageSpace) {
+	const stays = over >= 0 && !carry && unbreakableHeight(flow[over].block) > pageSpace;
+
+	if (carry || stays) {
 		cut = over + 1;  // a block that cannot split and is taller than a page would overflow the next page too
 	} else if (over >= 0) {
 		while (cut > 0 && flow[cut - 1].article === overArticle && overArticle && getComputedStyle(flow[cut - 1].block).breakAfter === "avoid")
@@ -266,7 +268,8 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 			cut = over || 1;
 	}
 
-	if (!carry && keptNotes == items.length && flow.slice(cut).every(f => f.article && isBlank(f.block))) {
+	// the notes of a page whose tall block stays where it starts stay with it
+	if (!carry && keptNotes == items.length && flow.slice(cut).every(f => f.article ? isBlank(f.block) : stays)) {
 		hideBlankOverflow(flow, limitY);
 		return null;
 	}
@@ -352,7 +355,11 @@ function hideBlankOverflow(flow: { block: HTMLElement, article: HTMLElement }[],
 	}
 }
 
-/** Height of the leading part of a block that cannot be split off: a table's header and first body row, a whole paragraph kept together, or the whole of any other block. */
+/**
+ * Height of the leading part of a block that cannot be split off: a table's header and first body row,
+ * a whole paragraph kept together, or the whole of any other block. Any other paragraph counts as 0: one
+ * with text splits between its lines, and one of pictures only moves to a new page instead of staying.
+ */
 function unbreakableHeight(block: HTMLElement): number {
 	if (block instanceof HTMLTableElement) {
 		const first = Array.from(block.rows).find(r => r.parentElement !== block.tHead);
