@@ -115,6 +115,7 @@ export class HtmlRenderer {
 	options: Options;
 	styleMap: Record<string, IDomStyle> = {};
 	currentPart: Part = null;
+	currentSectProps: SectionProperties = null;
 
 	tableVerticalMerges: CellVerticalMergeType[] = [];
 	currentVerticalMerge: CellVerticalMergeType = null;
@@ -416,10 +417,12 @@ export class HtmlRenderer {
 			let props = section.sectProps;
 			const pageElement = this.createPageElement(this.className, props, document.cssStyle);
 
+			this.currentSectProps = props;
 			this.options.renderHeaders && this.renderHeaderFooter(props.headerRefs, props,
 				result.length, prevProps != props, pageElement);
 
 			for (const sect of pages[i]) {
+				this.currentSectProps = sect.sectProps;
 				var contentElement = this.createSectionContent(sect.sectProps);
 				this.renderElements(sect.elements, contentElement);
 				pageElement.appendChild(contentElement);
@@ -1443,9 +1446,10 @@ section.${c}>footer { z-index: 1; }
 	placeShapeWrapper(anchor: DmlAnchor, autoFit: boolean, style: CSSStyleDeclaration, width: number, height: number) {
 		const set = (key: string, value: string) => style.setProperty(key, value);
 		const floating = !anchor.inline && !anchor.nested;
-		// text does not flow around square, tight or through wrapping: a shape anchored to the paragraph or line
-		// takes its own block, and one anchored to the page or margin is placed there like a no-wrap shape
+		// a shape anchored to the page or margin vertically is placed there like a no-wrap shape (text runs under it);
+		// a square, tight or through shape anchored to its paragraph floats, so the text wraps beside it
 		const placed = floating && (anchor.wrap == "wrapNone" || hasOwn(verticalFrames, anchor.v.relative));
+		const float = floating && !placed && ["wrapSquare", "wrapTight", "wrapThrough"].includes(anchor.wrap) ? this.floatSide(anchor.h, width) : null;
 
 		set("display", floating && !placed ? "block" : "inline-block");
 		set("position", placed ? "absolute" : "relative");
@@ -1463,7 +1467,11 @@ section.${c}>footer { z-index: 1; }
 		const left = anchorEdge(anchor.h, horizontalFrames, width);
 		const hStatic = staticOffset(anchor.h, horizontalFrames);
 
-		if (placed && left != null)
+		if (float) {
+			set("float", float.side);
+			set(float.side == "left" ? "margin-left" : "margin-right", pt(float.margin));
+			set("display", "block");
+		} else if (placed && left != null)
 			set("left", left);
 		else if (left != null)
 			set("margin-left", `calc(${left} - ${marginLeft})`);
@@ -1484,6 +1492,30 @@ section.${c}>footer { z-index: 1; }
 			set("bottom", `calc(${pageHeight} - ${top} - ${pt(height)})`);
 		else if (top != null)
 			set("top", top);
+	}
+
+	/**
+	 * The side of the text column a wrapped shape floats to (the half its centre is in) and its margin from
+	 * that edge, in pt; null when the page size or margins are unknown.
+	 */
+	floatSide(h: DmlAxis, width: number): { side: "left" | "right", margin: number } {
+		const page = parseFloat(this.currentSectProps?.pageSize?.width);
+		const left = parseFloat(this.currentSectProps?.pageMargins?.left) || 0;
+		const right = parseFloat(this.currentSectProps?.pageMargins?.right) || 0;
+
+		if (!(page > 0))
+			return null;
+
+		const column = page - left - right;
+		const frames: Record<string, [number, number]> = {
+			page: [0, page], margin: [left, column], column: [left, column],
+			leftMargin: [0, left], insideMargin: [0, left], rightMargin: [page - right, right], outsideMargin: [page - right, right],
+		};
+		const [start, span] = hasOwn(frames, h.relative) ? frames[h.relative] : [left, column];
+		const share = { left: 0, inside: 0, center: 0.5, right: 1, outside: 1 }[h.align];
+		const x = (h.offset !== undefined || share == null ? start + (h.offset ?? 0) : start + (span - width) * share) - left;
+
+		return x + width / 2 <= column / 2 ? { side: "left", margin: x } : { side: "right", margin: column - x - width };
 	}
 
 	placeVmlBox(elem: VmlElement, style: CSSStyleDeclaration) {

@@ -76,6 +76,10 @@ describe("DrawingML shapes", function () {
     }))))),
     para("case-pic-none", run(anchor({ h: posH("page", offset(72)), v: posV("paragraph", offset(0)) }, picture))),
     para("case-pic-square", run(anchor({ h: posH("column", offset(72)), v: posV("paragraph", offset(0)), wrap: '<wp:wrapSquare wrapText="bothSides"/>' }, picture))),
+    para("case-float-right", run(anchor({ h: posH("column", offset(150)), v: posV("paragraph", offset(0)), w: 40, ht: 30, wrap: '<wp:wrapSquare wrapText="bothSides"/>' }, shapeGraphic(wsp({ w: 40, h: 30 })))),
+      `<w:r><w:t xml:space="preserve">${"words that wrap beside the shape ".repeat(12)}</w:t></w:r>`),
+    para("case-float-left", run(anchor({ h: posH("margin", align("left")), v: posV("paragraph", offset(0)), w: 40, ht: 30, wrap: '<wp:wrapSquare wrapText="bothSides"/>' }, shapeGraphic(wsp({ w: 40, h: 30 })))),
+      `<w:r><w:t xml:space="preserve">${"words that wrap beside the shape ".repeat(12)}</w:t></w:r>`),
     para("case-square-page", run(anchor({ h: posH("page", offset(72)), v: posV("page", offset(200)), wrap: '<wp:wrapSquare wrapText="bothSides"/>' }, shapeGraphic(wsp())))),
     para("case-pic-behind", run(anchor({ h: posH("page", offset(72)), v: posV("paragraph", offset(0)), behind: 1 }, picture))),
     para("case-choice-empty", run(alternate('<mc:Choice Requires="wps"/>', ovalFallback))),
@@ -191,6 +195,33 @@ ${body}
   it("draws a line with no height flat", () => {
     const line = paragraph("case-flat-line").querySelector("svg line");
     expect(line.getAttribute("y2")).toBe(line.getAttribute("y1"));
+  });
+
+  // the client rects of the paragraph's text that share a band with the box
+  const textBeside = (id, box) => {
+    const range = document.createRange();
+    range.selectNodeContents(paragraph(id));
+    return Array.from(range.getClientRects()).filter(r => r.width > 0 && r.top < box.bottom - 1 && r.bottom > box.top + 1 && !(r.left >= box.left - 0.5 && r.right <= box.right + 0.5));
+  };
+
+  it("floats a square-wrapped shape to the right of the column so the text wraps beside it", () => {
+    const wrapper = wrapperOf("case-float-right");
+    const box = rect(wrapper);
+    expect(getComputedStyle(wrapper).cssFloat).toBe("right");
+    expectNear(box.left - rect(wrapper.closest("article")).left, 150 * 4 / 3);
+    const beside = textBeside("case-float-right", box);
+    expect(beside.length).toBeGreaterThan(0);
+    beside.forEach(r => expect(r.right).toBeLessThanOrEqual(box.left + 1));
+  });
+
+  it("floats a left-aligned square-wrapped shape to the left of the column", () => {
+    const wrapper = wrapperOf("case-float-left");
+    const box = rect(wrapper);
+    expect(getComputedStyle(wrapper).cssFloat).toBe("left");
+    expectNear(box.left, rect(wrapper.closest("article")).left);
+    const beside = textBeside("case-float-left", box);
+    expect(beside.length).toBeGreaterThan(0);
+    beside.forEach(r => expect(r.left).toBeGreaterThanOrEqual(box.right - 1));
   });
 
   it("places a square-wrapped shape anchored to the page on the page, out of the text flow", () => {
