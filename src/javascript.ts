@@ -123,13 +123,13 @@ function groupByParagraph(spans: HTMLElement[]): TabGroup[] {
 }
 
 function nextStop(g: TabGroup, x: number): TabStop {
-	const declared = g.stops.find(t => t.pos > x);
+	const declared = g.stops.find(t => t.pos > x + posTolerance);
 
 	if (declared)
 		return declared;
 
 	const size = g.defaultTabSize;
-	let pos = (Math.floor(x / size) + 1) * size;
+	let pos = (Math.floor((x + posTolerance) / size) + 1) * size;
 
 	while (g.clears.some(c => Math.abs(c - pos) < posTolerance))
 		pos += size;
