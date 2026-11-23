@@ -1440,9 +1440,10 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
 	placeShapeWrapper(anchor: DmlAnchor, autoFit: boolean, style: CSSStyleDeclaration, width: number, height: number) {
 		const set = (key: string, value: string) => style.setProperty(key, value);
 		const floating = !anchor.inline && !anchor.nested;
-		const placed = floating && anchor.wrap == "wrapNone";
+		// text does not flow around square, tight or through wrapping: a shape anchored to the paragraph or line
+		// takes its own block, and one anchored to the page or margin is placed there like a no-wrap shape
+		const placed = floating && (anchor.wrap == "wrapNone" || hasOwn(verticalFrames, anchor.v.relative));
 
-		// text does not flow around square, tight or through wrapping: such a shape takes its own block
 		set("display", floating && !placed ? "block" : "inline-block");
 		set("position", placed ? "absolute" : "relative");
 		set("width", pt(width));
