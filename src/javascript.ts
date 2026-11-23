@@ -18,6 +18,7 @@ interface TabGroup {
 	stops: TabStop[];
 	clears: number[];
 	defaultTabSize: number;
+	scale?: number;
 }
 
 const registered = new WeakMap<HTMLElement, Registration>();
@@ -66,22 +67,31 @@ export function remeasureTabStops(root: ParentNode, className: string = "docx"):
 
 export function measureTabSpans(spans: HTMLElement[]): void {
 	// stops are measured from the left edge, so right-to-left paragraphs keep the placeholder tab
-	const groups = groupByParagraph(spans.filter(s => registered.has(s) && s.isConnected && s.closest("p")?.getBoundingClientRect().width > 0 && getComputedStyle(s.closest("p")).direction != "rtl"));
+	let groups = groupByParagraph(spans.filter(s => registered.has(s) && s.isConnected && s.closest("p")?.getBoundingClientRect().width > 0 && getComputedStyle(s.closest("p")).direction != "rtl"));
 
 	if (groups.length == 0)
 		return;
 
 	groups.forEach(g => g.spans.forEach(reset));
 
-	const probe = document.createElement("div");
-	probe.style.cssText = "position:absolute;visibility:hidden;width:100pt";
-	(groups[0].p.closest("section") ?? groups[0].p.parentElement).appendChild(probe);
-	const scale = probe.getBoundingClientRect().width / 100;
-	probe.remove();
+	// each section can be zoomed on its own, so measure the scale once per section
+	const scales = new Map<HTMLElement, number>();
 
-	if (!(scale > 0))
-		return;
+	for (const g of groups) {
+		const host = g.p.closest("section") ?? g.p.parentElement;
 
+		if (!scales.has(host)) {
+			const probe = document.createElement("div");
+			probe.style.cssText = "position:absolute;visibility:hidden;width:100pt";
+			host.appendChild(probe);
+			scales.set(host, probe.getBoundingClientRect().width / 100);
+			probe.remove();
+		}
+
+		g.scale = scales.get(host);
+	}
+
+	groups = groups.filter(g => g.scale > 0);
 	const rounds = Math.max(...groups.map(g => g.spans.length));
 
 	for (let k = 0; k < rounds; k++) {
@@ -89,12 +99,14 @@ export function measureTabSpans(spans: HTMLElement[]): void {
 
 		for (const g of round) {
 			const span = g.spans[k];
-			span.textContent = "";
+			// a zero-size tab character keeps the tab in copied and searched text without taking room
+			span.textContent = "\t";
+			span.style.fontSize = "0";
 			span.style.display = "inline-block";
 			span.style.width = "0";
 		}
 
-		const measured = round.map(g => measureTab(g, k, scale));
+		const measured = round.map(g => measureTab(g, k, g.scale));
 
 		round.forEach((g, i) => {
 			const span = g.spans[k];
@@ -196,7 +208,7 @@ function segmentWidth(span: HTMLElement, next: HTMLElement | undefined, p: HTMLE
 
 	if (stopAt) {
 		const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
-		walker.currentNode = span;
+		walker.currentNode = span.lastChild ?? span;
 
 		for (let n = walker.nextNode(); n && range.isPointInRange(n, 0); n = walker.nextNode()) {
 			const i = n.textContent.indexOf(stopAt);

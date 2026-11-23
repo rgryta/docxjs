@@ -13,12 +13,15 @@
   const pageBreak = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
   const part = (tag, text) => `<w:${tag} ${NS}>${para(text)}</w:${tag}>`;
 
-  function build(body) {
+  function build(body, footnotes = null) {
     const zip = new JSZip();
     zip.file("_rels/.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="' + REL + 'officeDocument" Target="word/document.xml"/></Relationships>');
     zip.file("word/document.xml", `<w:document ${NS}><w:body>${body}<w:sectPr>${LANDSCAPE}</w:sectPr></w:body></w:document>`);
     zip.file("word/_rels/document.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-      + `<Relationship Id="rIdH" Type="${REL}header" Target="header1.xml"/><Relationship Id="rIdF" Type="${REL}footer" Target="footer1.xml"/></Relationships>`);
+      + `<Relationship Id="rIdH" Type="${REL}header" Target="header1.xml"/><Relationship Id="rIdF" Type="${REL}footer" Target="footer1.xml"/>`
+      + (footnotes ? `<Relationship Id="rIdN" Type="${REL}footnotes" Target="footnotes.xml"/>` : "") + '</Relationships>');
+    if (footnotes)
+      zip.file("word/footnotes.xml", `<w:footnotes ${NS}><w:footnote w:id="1">${para(footnotes)}</w:footnote></w:footnotes>`);
     zip.file("word/header1.xml", part("hdr", "Header"));
     zip.file("word/footer1.xml", part("ftr", "Footer"));
     return zip.generateAsync({ type: "blob" });
@@ -48,6 +51,21 @@
       expect(tall.closest("section.docx")).toBe(pages[0]);
       expect(pages.length).toBe(2);
       expect(pages[1].textContent).toContain("Second page");
+    });
+
+    it("keeps the notes on the page of a tall block that stays where it starts", async () => {
+      const body = '<w:p><w:r><w:t>Title</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r></w:p>'
+        + table(row(paras(10, "left"), paras(25, "middle"), paras(60, "right")));
+
+      div = document.createElement("div");
+      document.body.appendChild(div);
+      await docx.renderAsync(await build(body, "Note"), div, null, { ignoreLastRenderedPageBreak: true, experimental: true });
+
+      expect(docx.paginate(div, "docx", { budgetMs: 1000 })).toBe(true);
+
+      const pages = Array.from(div.querySelectorAll("section.docx"));
+      expect(pages.length).toBe(1);
+      expect(pages[0].querySelector(":scope > ol")).not.toBeNull();
     });
 
     it("keeps a paragraph with keep-lines taller than a page where it starts, even after earlier text", async () => {

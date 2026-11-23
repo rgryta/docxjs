@@ -105,6 +105,13 @@ ${body.join("\n")}
     expect(tabSpans(container)[2].style.borderBottomStyle).toBe("dotted");
   });
 
+  it("keeps a tab character in the text of a measured paragraph", async () => {
+    const container = await render(separateStops);
+    docx.remeasureTabStops(container);
+
+    expect(run(container, "Left").closest("p").textContent).toBe("a\tLeft");
+  });
+
   it("measures each tab of one paragraph after the tabs before it", async () => {
     const container = await render([
       paragraph(tabs(["left", 2880], ["center", 4680], ["right", 9360]), "a", "\t", "One", "\t", "Two", "\t", "Three"),
@@ -200,6 +207,21 @@ ${body.join("\n")}
     expectAt(dotLeft(container, "12.5"), container, 288, "12.5");
     expectAt(dotLeft(container, "1234.75"), container, 288, "1234.75");
     expectAt(run(container, "100").getBoundingClientRect().right, container, 288, "100");
+  });
+
+  it("measures each section with its own zoom", async () => {
+    const container = await render([
+      paragraph(tabs(["right", 9360]), "a", "\t", "First"),
+      '<w:p><w:pPr><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:pPr></w:p>',
+      paragraph(tabs(["right", 9360]), "b", "\t", "Second"),
+    ]);
+    const [first, second] = container.querySelectorAll("section.docx");
+    second.style.zoom = "0.5";
+    docx.remeasureTabStops(container);
+
+    const from = section => section.querySelector("article").getBoundingClientRect().left;
+    expect(Math.abs(run(container, "First").getBoundingClientRect().right - from(first) - 468 * PX_PER_PT)).toBeLessThan(TOLERANCE_PX);
+    expect(Math.abs(run(container, "Second").getBoundingClientRect().right - from(second) - 468 * PX_PER_PT * 0.5)).toBeLessThan(TOLERANCE_PX);
   });
 
   it("measures inside a zoomed wrapper", async () => {

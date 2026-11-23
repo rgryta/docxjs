@@ -49,7 +49,7 @@ function splitPages(pages: HTMLElement[], className: string, deadline: number): 
 			return false;
 
 		// Pages before i are final, so i is this page's final position.
-		number = pageNumber(pages[i], number);
+		[number] = pageNumber(pages[i], number);
 		showHeaderFooter(pages[i], number);
 		const next = splitPage(pages[i], className);
 
@@ -60,9 +60,44 @@ function splitPages(pages: HTMLElement[], className: string, deadline: number): 
 	return true;
 }
 
-function pageNumber(page: HTMLElement, previous: number): number {
+/**
+ * The page's number, and whether Word puts a blank page before it: an odd- or even-page section
+ * that would start on the wrong side gets one, which takes a number but is not rendered.
+ */
+function pageNumber(page: HTMLElement, previous: number): [number, boolean] {
 	const start = page.getAttribute("data-page-start");
-	return start === null ? previous + 1 : Number(start);
+	const number = start === null ? previous + 1 : Number(start);
+	const parity = page.getAttribute("data-page-parity");
+	const blank = !!parity && (number % 2 == 0) != (parity == "even");
+	return [blank ? number + 1 : number, blank];
+}
+
+/** The page number in the section's format, or null for a format it does not write (the field keeps its saved text). */
+function formatPageNumber(number: number, format: string): string {
+	const letter = (base: number) => String.fromCharCode(base + (number - 1) % 26).repeat(Math.ceil(number / 26));
+
+	switch (format) {
+		case null: return String(number);
+		case "upperRoman": return roman(number);
+		case "lowerRoman": return roman(number).toLowerCase();
+		case "upperLetter": return number > 0 ? letter(65) : null;
+		case "lowerLetter": return number > 0 ? letter(97) : null;
+		default: return null;
+	}
+}
+
+function roman(number: number): string {
+	if (!(number > 0 && number < 4000))
+		return String(number);
+
+	const digits: [number, string][] = [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]];
+	let result = "";
+
+	for (const [value, text] of digits)
+		for (; number >= value; number -= value)
+			result += text;
+
+	return result;
 }
 
 /**
@@ -78,17 +113,24 @@ function fillPages(pages: HTMLElement[], withCount: boolean): boolean {
 		return setFieldText(field, text) && before != text.length;
 	};
 
-	for (const page of pages) {
-		number = pageNumber(page, number);
+	const numbers = pages.map(page => {
+		const [value, blank] = pageNumber(page, number);
+		number = value;
+		return { value, blank };
+	});
+	const count = String(pages.length + numbers.filter(n => n.blank).length);
 
-		if (!page.hasAttribute("data-page-format"))
-			fields(page, "PAGE").forEach(f => changed = fill(f, String(number)) || changed);
+	pages.forEach((page, i) => {
+		const text = formatPageNumber(numbers[i].value, page.getAttribute("data-page-format"));
+
+		if (text != null)
+			fields(page, "PAGE").forEach(f => changed = fill(f, text) || changed);
 
 		if (withCount)
-			fields(page, "NUMPAGES").forEach(f => changed = fill(f, String(pages.length)) || changed);
+			fields(page, "NUMPAGES").forEach(f => changed = fill(f, count) || changed);
 
-		showHeaderFooter(page, number);
-	}
+		showHeaderFooter(page, numbers[i].value);
+	});
 
 	return changed;
 }
@@ -156,7 +198,24 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 		...children.filter(c => c.tagName === "OL").map(block => ({ block, article: null as HTMLElement })),
 	];
 	// Empty paragraphs (such as the one holding a page break) never start a page.
-	const over = flow.findIndex(f => !isBlank(f.block) && f.block.getBoundingClientRect().bottom > limitY);
+	// the page also grows by the last block's bottom margin: margins do not collapse in the page's flex column
+	const last = flow[flow.length - 1].block;
+	const end = (block: HTMLElement) => block.getBoundingClientRect().bottom + (block === last ? parseFloat(getComputedStyle(block).marginBottom) || 0 : 0);
+	let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > limitY);
+	let splitLimit = limitY;
+	let keepNotes = false;
+
+	// Notes that do not fit push the last body lines down, as in Word, instead of taking a page of their own.
+	if (over > 0 && !flow[over].article && flow[over - 1].article) {
+		const bodyLimit = limitY - (end(last) - flow[over - 1].block.getBoundingClientRect().bottom);
+		const bodyOver = flow.findIndex(f => f.article && !isBlank(f.block) && f.block.getBoundingClientRect().bottom > bodyLimit);
+
+		if (bodyOver > 0 && bodyLimit - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT) {
+			over = bodyOver;
+			splitLimit = bodyLimit;
+			keepNotes = true;
+		}
+	}
 
 	if (over < 0) {
 		hideBlankOverflow(flow, limitY);
@@ -168,11 +227,13 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	let carry: HTMLElement = null;
 
 	if (flow[over].block.tagName === "TABLE")
-		carry = splitTable(flow[over].block as HTMLTableElement, limitY);
+		carry = splitTable(flow[over].block as HTMLTableElement, splitLimit);
 	else if (flow[over].block.tagName === "P")
-		carry = splitParagraph(flow[over].block, limitY, className);
+		carry = splitParagraph(flow[over].block, splitLimit, className);
 
-	if (carry || unbreakableHeight(flow[over].block) > pageSpace) {
+	const stays = !carry && unbreakableHeight(flow[over].block) > pageSpace;
+
+	if (carry || stays) {
 		cut = over + 1;  // a block that cannot split and is taller than a page would overflow the next page too
 	} else {
 		while (cut > 0 && flow[cut - 1].article === overArticle && overArticle && getComputedStyle(flow[cut - 1].block).breakAfter === "avoid")
@@ -182,7 +243,8 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 			cut = over || 1;
 	}
 
-	if (!carry && flow.slice(cut).every(f => f.article && isBlank(f.block))) {
+	// the notes of a page whose tall block stays where it starts stay with it
+	if (!carry && flow.slice(cut).every(f => f.article ? isBlank(f.block) : stays)) {
 		hideBlankOverflow(flow, limitY);
 		return null;
 	}
@@ -196,13 +258,14 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	for (const f of flow.slice(cut)) {
 		if (f.article)
 			moved.set(f.article, [...(moved.get(f.article) ?? []), f.block]);
-		else
+		else if (!keepNotes)
 			notes.push(f.block);
 	}
 
 	const next = page.cloneNode(false) as HTMLElement;
 	next.removeAttribute("data-docx-first-page");
 	next.removeAttribute("data-page-start");
+	next.removeAttribute("data-page-parity");
 
 	for (const c of children) {
 		if (c.tagName === "HEADER" && c.dataset.docxHf !== "first")
@@ -252,7 +315,11 @@ function hideBlankOverflow(flow: { block: HTMLElement, article: HTMLElement }[],
 	}
 }
 
-/** Height of the leading part of a block that cannot be split off: a table's header and first body row, a whole paragraph kept together, or the whole of any other block. */
+/**
+ * Height of the leading part of a block that cannot be split off: a table's header and first body row,
+ * a whole paragraph kept together, or the whole of any other block. Any other paragraph counts as 0: one
+ * with text splits between its lines, and one of pictures only moves to a new page instead of staying.
+ */
 function unbreakableHeight(block: HTMLElement): number {
 	if (block instanceof HTMLTableElement) {
 		const first = Array.from(block.rows).find(r => r.parentElement !== block.tHead);

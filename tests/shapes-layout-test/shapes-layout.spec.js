@@ -69,6 +69,7 @@ describe("DrawingML shapes", function () {
     para("case-right", run(anchor({ h: posH("margin", align("right")), v: posV("paragraph", offset(0)) }, shapeGraphic(wsp())))),
     para("case-center", run(anchor({ h: posH("margin", align("center")), v: posV("paragraph", offset(0)) }, shapeGraphic(wsp())))),
     para("case-v-para", run(anchor({ h: posH("column", offset(0)), v: posV("paragraph", offset(12)) }, shapeGraphic(wsp())))),
+    para("case-flat-line", run(inline(100, 0, shapeGraphic(wsp({ geom: "line", w: 100, h: 0 }))))),
     para("case-flip", run(inline(100, 20, shapeGraphic(wsp({ w: 100, h: 20, xfrm: ' flipH="1"', text: textParas("Flipped") }))))),
     para("case-autofit", run(inline(100, 10, shapeGraphic(wsp({
       w: 100, h: 10, text: textParas("one", "two", "three"), bodyPr: "<wps:bodyPr><a:spAutoFit/></wps:bodyPr>",
@@ -183,6 +184,11 @@ ${body}
     expectNear(rect(shapeBox("case-right")).right, page.right - MARGIN);
     const centre = rect(shapeBox("case-center"));
     expectNear((centre.left + centre.right) / 2, page.left + page.width / 2);
+  });
+
+  it("draws a line with no height flat", () => {
+    const line = paragraph("case-flat-line").querySelector("svg line");
+    expect(line.getAttribute("y2")).toBe(line.getAttribute("y1"));
   });
 
   it("offsets a paragraph-relative shape from the top of its line", () => {

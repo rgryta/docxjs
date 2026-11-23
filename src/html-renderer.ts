@@ -24,7 +24,7 @@ import { BaseHeaderFooterPart, FooterPart } from './header-footer/parts';
 import { Part } from './common/part';
 import { dashPatterns, formatNumber, paintAttrs, VmlElement, VmlSvgPart, VmlTextBox } from './vml/vml';
 import { DmlAnchor, DmlAxis, DmlColor, DmlDrawing, DmlLineEnd, DmlShape, DmlStyleRef, formatColor, ResolvedColor, resolveColor } from './drawing/shape';
-import { arrowHead, DrawingGroup, GroupPlace } from './drawing/group';
+import { arrowBase, arrowHead, DrawingGroup, GroupPlace } from './drawing/group';
 import { WmlCommentRangeStart, WmlCommentReference } from './comments/elements';
 import { cx, h, ns } from './html';
 
@@ -42,6 +42,8 @@ interface Section {
 declare const Highlight: any;
 
 type CellVerticalMergeType = Record<number, HTMLTableCellElement>;
+
+const pageVariableNames = ["--docx-page-width", "--docx-page-height", "--docx-margin-left", "--docx-margin-right", "--docx-margin-top", "--docx-margin-bottom"] as const;
 
 interface ShapeContent {
 	parts: VmlSvgPart[];
@@ -346,7 +348,7 @@ export class HtmlRenderer {
 					style.minHeight = props.pageSize.height;
 			}
 
-			const pageVariables = {
+			const pageVariables: Record<(typeof pageVariableNames)[number], string> = {
 				"--docx-page-width": props.pageSize?.width,
 				"--docx-page-height": props.pageSize?.height,
 				"--docx-margin-left": props.pageMargins?.left,
@@ -397,7 +399,10 @@ export class HtmlRenderer {
 				pageElement.setAttribute("data-page-start", String(pageNumber.start));
 
 			if (pageNumber?.chapStyle || pageNumber?.format && pageNumber.format != "decimal")
-				pageElement.setAttribute("data-page-format", "other");
+				pageElement.setAttribute("data-page-format", pageNumber.chapStyle ? "other" : pageNumber.format);
+
+			if (prevProps != props && (props?.type == SectionType.EvenPage || props?.type == SectionType.OddPage))
+				pageElement.setAttribute("data-page-parity", props.type == SectionType.EvenPage ? "even" : "odd");
 
 			this.options.renderHeaders && this.renderHeaderFooter(props.headerRefs, props,
 				result.length, prevProps != props, pageElement);
@@ -421,6 +426,10 @@ export class HtmlRenderer {
 
 			this.options.renderFooters && this.renderHeaderFooter(props.footerRefs, props,
 				result.length, prevProps != props, pageElement);
+
+			// only placed shapes read the page variables, so pages without one stay as before
+			if (!pageElement.querySelector('[style*="var(--docx-"]'))
+				pageVariableNames.forEach(name => pageElement.style.removeProperty(name));
 
 			result.push(pageElement);
 			prevProps = props;
@@ -1482,6 +1491,8 @@ section.${c}>footer { z-index: 1; }
 
 		if (elem.children[0].type == DomType.Image) {
 			this.placeShapeWrapper(elem.anchor, false, wrapper.style, elem.anchor.width ?? 0, elem.anchor.height ?? 0);
+			// unlike a shape, a picture keeps its clicks, so a linked picture still opens its link
+			wrapper.style.removeProperty("pointer-events");
 			wrapper.appendChild(this.renderImage(elem.children[0] as IDomImage));
 			return wrapper;
 		}
@@ -1558,7 +1569,7 @@ section.${c}>footer { z-index: 1; }
 		};
 
 		const radius = pt(shape.radius * Math.min(width, height));
-		const lineEnd = shape.place ? [width, height].map(v => formatNumber(v * 4 / 3)) : ["100%", "100%"];
+		const lineEnd = [width, height].map(v => !(v > 0) ? "0" : shape.place ? formatNumber(v * 4 / 3) : "100%");
 		const parts: VmlSvgPart[] = [
 			shape.geometry == "ellipse" ? { tagName: "ellipse", attrs: { cx: "50%", cy: "50%", rx: "50%", ry: "50%", ...attrs(true) } }
 				: shape.geometry == "line" ? { tagName: "line", attrs: { x1: "0", y1: "0", x2: lineEnd[0], y2: lineEnd[1], ...attrs(false) } }
@@ -1578,6 +1589,8 @@ section.${c}>footer { z-index: 1; }
 				}
 
 				const d = arrowHead(ends[i], ends[1 - i], paint.strokeWidth, headScale[end.width] ?? 3, headScale[end.length] ?? 3);
+				const [bx, by] = arrowBase(ends[i], ends[1 - i], paint.strokeWidth, headScale[end.length] ?? 3);
+				Object.assign(parts[0].attrs, i ? { x2: formatNumber(bx), y2: formatNumber(by) } : { x1: formatNumber(bx), y1: formatNumber(by) });
 				const head: Record<string, string> = { d, fill: paint.stroke, stroke: "none" };
 				if (stroke.alpha < 1) head["fill-opacity"] = formatNumber(stroke.alpha);
 				parts.push({ tagName: "path", attrs: head });
@@ -1612,6 +1625,7 @@ section.${c}>footer { z-index: 1; }
 		const floating = !anchor.inline && !anchor.nested;
 		const placed = floating && anchor.wrap == "wrapNone";
 
+		// text does not flow around square, tight or through wrapping: such a shape takes its own block
 		set("display", floating && !placed ? "block" : "inline-block");
 		set("position", placed ? "absolute" : "relative");
 		set("width", pt(width));

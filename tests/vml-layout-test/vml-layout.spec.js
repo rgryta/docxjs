@@ -24,6 +24,7 @@ describe("VML shapes", function () {
     para("case-v-text", pict(`<v:rect style="${PAGE}margin-top:12pt;width:20pt;height:5pt;mso-position-vertical-relative:text"/>`)),
     para("case-bar", pict(`<v:shape coordsize="300,7" path="m300,l,,,7r300,l300,xe" fillcolor="black" stroked="f" style="${PAGE}margin-top:2pt;width:225pt;height:.6pt;mso-position-vertical-relative:text"/>`)),
     para("case-line", pict(`<v:line from="0,0" to="100pt,0" strokeweight="2pt" style="${PAGE}mso-position-vertical-relative:text"/>`)),
+    para("case-system-colour", pict('<v:rect fillcolor="window" strokecolor="windowText" style="width:20pt;height:10pt"/>')),
     para("case-dash", pict(`<v:rect strokecolor="red [3204]" style="width:20pt;height:10pt"><v:stroke dashstyle="dash"/></v:rect>`)),
     para("case-plain", '<w:r><w:t>Boxed text</w:t></w:r>'),
     para("case-text-box", pict(
@@ -114,6 +115,12 @@ ${body}
     const page = rect(section());
     expectNear(rect(shapeBox("case-h-centre")).left + rect(shapeBox("case-h-centre")).width / 2 - page.left, page.width / 2);
     expectNear(rect(shapeBox("case-h-right")).right - page.left, page.width - 96);
+  });
+
+  it("draws the window and windowText system colours", () => {
+    const shape = paragraph("case-system-colour").querySelector("svg rect");
+    expect(shape.getAttribute("fill")).toBe("white");
+    expect(shape.getAttribute("stroke")).toBe("black");
   });
 
   it("places a text-relative shape below the top of its line", () => {

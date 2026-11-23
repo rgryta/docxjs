@@ -103,6 +103,9 @@ function asArray(val) {
 function clamp(val, min, max) {
     return min > val ? min : (max < val ? max : val);
 }
+function strictInteger(text) {
+    return /^-?\d+$/.test(text?.trim() ?? "") ? parseInt(text) : NaN;
+}
 
 const ns$1 = {
     wordml: "http://schemas.openxmlformats.org/wordprocessingml/2006/main"};
@@ -1321,17 +1324,23 @@ function integerPair(text, fallback) {
     const parts = text.split(",");
     return fallback.map((value, i) => {
         const part = parts[i]?.trim();
-        return !part ? value : /^-?\d+$/.test(part) ? parseInt(part) : NaN;
+        return !part ? value : strictInteger(part);
     });
+}
+function arrowBase(tip, from, strokeWidth, lengthScale) {
+    const [tx, ty] = tip.map(v => v * pxPerPt);
+    const [fx, fy] = from.map(v => v * pxPerPt);
+    const distance = Math.hypot(tx - fx, ty - fy) || 1;
+    const length = lengthScale * strokeWidth * pxPerPt;
+    return [tx - (tx - fx) / distance * length, ty - (ty - fy) / distance * length];
 }
 function arrowHead(tip, from, strokeWidth, widthScale, lengthScale) {
     const [tx, ty] = tip.map(v => v * pxPerPt);
     const [fx, fy] = from.map(v => v * pxPerPt);
     const distance = Math.hypot(tx - fx, ty - fy) || 1;
     const [ux, uy] = [(tx - fx) / distance, (ty - fy) / distance];
-    const length = lengthScale * strokeWidth * pxPerPt;
     const half = widthScale * strokeWidth * pxPerPt / 2;
-    const [bx, by] = [tx - ux * length, ty - uy * length];
+    const [bx, by] = arrowBase(tip, from, strokeWidth, lengthScale);
     const f = (v) => `${parseFloat(v.toFixed(2))}`;
     return `M ${f(tx)} ${f(ty)} L ${f(bx - uy * half)} ${f(by + ux * half)} L ${f(bx + uy * half)} ${f(by - ux * half)} Z`;
 }
@@ -1509,7 +1518,7 @@ function parseVmlGroup(elem, parser, frame) {
     return result;
 }
 function groupUnit(value, fallback = null) {
-    return value == null ? fallback : /^-?\d+$/.test(value) ? parseInt(value) : NaN;
+    return value == null ? fallback : strictInteger(value);
 }
 function groupRect(style) {
     return [groupUnit(style.get("left"), 0), groupUnit(style.get("top"), 0), groupUnit(style.get("width")), groupUnit(style.get("height"))];
@@ -1654,7 +1663,10 @@ function arcSize(value) {
     return clamp(size, 0, 0.5);
 }
 function parseViewBox(coordsize, coordorigin) {
-    const integer = (part) => /^-?\d+$/.test(part?.trim() ?? "") ? parseInt(part) : null;
+    const integer = (part) => {
+        const value = strictInteger(part);
+        return Number.isNaN(value) ? null : value;
+    };
     const size = (coordsize ?? "1000,1000").split(",").map(integer);
     const origin = (coordorigin ?? "").split(",").map(integer);
     return [origin[0] ?? 0, origin[1] ?? 0, size[0] > 0 ? size[0] : 1, size[1] > 0 ? size[1] : 1].join(" ");
@@ -1692,12 +1704,15 @@ const namedColors = new Set(("aliceblue antiquewhite aqua aquamarine azure beige
     "peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown " +
     "seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal " +
     "thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen").split(" "));
+const systemColors = new Map([["window", "white"], ["windowtext", "black"]]);
 function vmlColor(value) {
     const color = value?.replace(/\s*\[\d+\]\s*$/, "").trim().toLowerCase();
     if (!color)
         return null;
     if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/.test(color) || namedColors.has(color))
         return color;
+    if (systemColors.has(color))
+        return systemColors.get(color);
     const rgb = /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/.exec(color);
     if (rgb && rgb.slice(1).every(c => parseInt(c) <= 255))
         return `rgb(${rgb.slice(1).map(c => parseInt(c)).join(", ")})`;
@@ -1864,7 +1879,7 @@ class DmlShape extends OpenXmlElementBase {
     }
 }
 function integer(text) {
-    const value = /^-?\d+$/.test(text?.trim() ?? "") ? parseInt(text) : NaN;
+    const value = strictInteger(text);
     return Math.abs(value) <= maxEmu ? value : null;
 }
 function emuPoints(text) {
@@ -3390,7 +3405,7 @@ class DocumentParser {
                     style["line-height"] = multiple.toFixed(2);
             }
             else {
-                const length = /(mm|cm|in|pc|pi|pt)$/.test(line) ? convertLength(line, LengthUsage.Dxa) : `${parseInt(line) / 20}pt`;
+                const length = convertLength(line, LengthUsage.Dxa);
                 style["line-height"] = style["min-height"] = length;
             }
         }
@@ -3684,27 +3699,34 @@ function remeasureTabStops(root, className = "docx") {
     measureTabSpans(Array.from(root.querySelectorAll(`.${className}-tab-stop`)));
 }
 function measureTabSpans(spans) {
-    const groups = groupByParagraph(spans.filter(s => registered.has(s) && s.isConnected && s.closest("p")?.getBoundingClientRect().width > 0 && getComputedStyle(s.closest("p")).direction != "rtl"));
+    let groups = groupByParagraph(spans.filter(s => registered.has(s) && s.isConnected && s.closest("p")?.getBoundingClientRect().width > 0 && getComputedStyle(s.closest("p")).direction != "rtl"));
     if (groups.length == 0)
         return;
     groups.forEach(g => g.spans.forEach(reset));
-    const probe = document.createElement("div");
-    probe.style.cssText = "position:absolute;visibility:hidden;width:100pt";
-    (groups[0].p.closest("section") ?? groups[0].p.parentElement).appendChild(probe);
-    const scale = probe.getBoundingClientRect().width / 100;
-    probe.remove();
-    if (!(scale > 0))
-        return;
+    const scales = new Map();
+    for (const g of groups) {
+        const host = g.p.closest("section") ?? g.p.parentElement;
+        if (!scales.has(host)) {
+            const probe = document.createElement("div");
+            probe.style.cssText = "position:absolute;visibility:hidden;width:100pt";
+            host.appendChild(probe);
+            scales.set(host, probe.getBoundingClientRect().width / 100);
+            probe.remove();
+        }
+        g.scale = scales.get(host);
+    }
+    groups = groups.filter(g => g.scale > 0);
     const rounds = Math.max(...groups.map(g => g.spans.length));
     for (let k = 0; k < rounds; k++) {
         const round = groups.filter(g => k < g.spans.length);
         for (const g of round) {
             const span = g.spans[k];
-            span.textContent = "";
+            span.textContent = "\t";
+            span.style.fontSize = "0";
             span.style.display = "inline-block";
             span.style.width = "0";
         }
-        const measured = round.map(g => measureTab(g, k, scale));
+        const measured = round.map(g => measureTab(g, k, g.scale));
         round.forEach((g, i) => {
             const span = g.spans[k];
             span.style.width = `${measured[i].width.toFixed(2)}pt`;
@@ -3787,7 +3809,7 @@ function segmentWidth(span, next, p, sbb, stopAt) {
         range.setEnd(p, p.childNodes.length);
     if (stopAt) {
         const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
-        walker.currentNode = span;
+        walker.currentNode = span.lastChild ?? span;
         for (let n = walker.nextNode(); n && range.isPointInRange(n, 0); n = walker.nextNode()) {
             const i = n.textContent.indexOf(stopAt);
             if (i >= 0) {
@@ -3852,6 +3874,7 @@ function cx(...classNames) {
     return classNames.filter(Boolean).join(" ");
 }
 
+const pageVariableNames = ["--docx-page-width", "--docx-page-height", "--docx-margin-left", "--docx-margin-right", "--docx-margin-top", "--docx-margin-bottom"];
 const pageWidth = "var(--docx-page-width, 100%)";
 const pageHeight = "var(--docx-page-height, 100%)";
 const marginLeft = "var(--docx-margin-left, 0pt)";
@@ -4125,7 +4148,9 @@ class HtmlRenderer {
             if (pageNumber?.start != null && prevProps != props && props.type != SectionType.Continuous && props.type != SectionType.NextColumn)
                 pageElement.setAttribute("data-page-start", String(pageNumber.start));
             if (pageNumber?.chapStyle || pageNumber?.format && pageNumber.format != "decimal")
-                pageElement.setAttribute("data-page-format", "other");
+                pageElement.setAttribute("data-page-format", pageNumber.chapStyle ? "other" : pageNumber.format);
+            if (prevProps != props && (props?.type == SectionType.EvenPage || props?.type == SectionType.OddPage))
+                pageElement.setAttribute("data-page-parity", props.type == SectionType.EvenPage ? "even" : "odd");
             this.options.renderHeaders && this.renderHeaderFooter(props.headerRefs, props, result.length, prevProps != props, pageElement);
             for (const sect of pages[i]) {
                 var contentElement = this.createSectionContent(sect.sectProps);
@@ -4142,6 +4167,8 @@ class HtmlRenderer {
                 notes && pageElement.appendChild(notes);
             }
             this.options.renderFooters && this.renderHeaderFooter(props.footerRefs, props, result.length, prevProps != props, pageElement);
+            if (!pageElement.querySelector('[style*="var(--docx-"]'))
+                pageVariableNames.forEach(name => pageElement.style.removeProperty(name));
             result.push(pageElement);
             prevProps = props;
         }
@@ -4899,6 +4926,7 @@ section.${c}>footer { z-index: 1; }
         }
         if (elem.children[0].type == DomType.Image) {
             this.placeShapeWrapper(elem.anchor, false, wrapper.style, elem.anchor.width ?? 0, elem.anchor.height ?? 0);
+            wrapper.style.removeProperty("pointer-events");
             wrapper.appendChild(this.renderImage(elem.children[0]));
             return wrapper;
         }
@@ -4960,7 +4988,7 @@ section.${c}>footer { z-index: 1; }
             return result;
         };
         const radius = pt(shape.radius * Math.min(width, height));
-        const lineEnd = shape.place ? [width, height].map(v => formatNumber(v * 4 / 3)) : ["100%", "100%"];
+        const lineEnd = [width, height].map(v => !(v > 0) ? "0" : shape.place ? formatNumber(v * 4 / 3) : "100%");
         const parts = [
             shape.geometry == "ellipse" ? { tagName: "ellipse", attrs: { cx: "50%", cy: "50%", rx: "50%", ry: "50%", ...attrs(true) } }
                 : shape.geometry == "line" ? { tagName: "line", attrs: { x1: "0", y1: "0", x2: lineEnd[0], y2: lineEnd[1], ...attrs(false) } }
@@ -4976,6 +5004,8 @@ section.${c}>footer { z-index: 1; }
                     return;
                 }
                 const d = arrowHead(ends[i], ends[1 - i], paint.strokeWidth, headScale[end.width] ?? 3, headScale[end.length] ?? 3);
+                const [bx, by] = arrowBase(ends[i], ends[1 - i], paint.strokeWidth, headScale[end.length] ?? 3);
+                Object.assign(parts[0].attrs, i ? { x2: formatNumber(bx), y2: formatNumber(by) } : { x1: formatNumber(bx), y1: formatNumber(by) });
                 const head = { d, fill: paint.stroke, stroke: "none" };
                 if (stroke.alpha < 1)
                     head["fill-opacity"] = formatNumber(stroke.alpha);
@@ -5330,7 +5360,7 @@ function splitPages(pages, className, deadline) {
     for (let i = 0; i < pages.length; i++) {
         if (pages.length >= MAX_PAGES || performance.now() >= deadline)
             return false;
-        number = pageNumber(pages[i], number);
+        [number] = pageNumber(pages[i], number);
         showHeaderFooter(pages[i], number);
         const next = splitPage(pages[i], className);
         if (next)
@@ -5340,7 +5370,31 @@ function splitPages(pages, className, deadline) {
 }
 function pageNumber(page, previous) {
     const start = page.getAttribute("data-page-start");
-    return start === null ? previous + 1 : Number(start);
+    const number = start === null ? previous + 1 : Number(start);
+    const parity = page.getAttribute("data-page-parity");
+    const blank = !!parity && (number % 2 == 0) != (parity == "even");
+    return [blank ? number + 1 : number, blank];
+}
+function formatPageNumber(number, format) {
+    const letter = (base) => String.fromCharCode(base + (number - 1) % 26).repeat(Math.ceil(number / 26));
+    switch (format) {
+        case null: return String(number);
+        case "upperRoman": return roman(number);
+        case "lowerRoman": return roman(number).toLowerCase();
+        case "upperLetter": return number > 0 ? letter(65) : null;
+        case "lowerLetter": return number > 0 ? letter(97) : null;
+        default: return null;
+    }
+}
+function roman(number) {
+    if (!(number > 0 && number < 4000))
+        return String(number);
+    const digits = [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]];
+    let result = "";
+    for (const [value, text] of digits)
+        for (; number >= value; number -= value)
+            result += text;
+    return result;
 }
 function fillPages(pages, withCount) {
     let number = 0;
@@ -5349,14 +5403,20 @@ function fillPages(pages, withCount) {
         const before = field.textContent.length;
         return setFieldText(field, text) && before != text.length;
     };
-    for (const page of pages) {
-        number = pageNumber(page, number);
-        if (!page.hasAttribute("data-page-format"))
-            fields(page, "PAGE").forEach(f => changed = fill(f, String(number)) || changed);
+    const numbers = pages.map(page => {
+        const [value, blank] = pageNumber(page, number);
+        number = value;
+        return { value, blank };
+    });
+    const count = String(pages.length + numbers.filter(n => n.blank).length);
+    pages.forEach((page, i) => {
+        const text = formatPageNumber(numbers[i].value, page.getAttribute("data-page-format"));
+        if (text != null)
+            fields(page, "PAGE").forEach(f => changed = fill(f, text) || changed);
         if (withCount)
-            fields(page, "NUMPAGES").forEach(f => changed = fill(f, String(pages.length)) || changed);
-        showHeaderFooter(page, number);
-    }
+            fields(page, "NUMPAGES").forEach(f => changed = fill(f, count) || changed);
+        showHeaderFooter(page, numbers[i].value);
+    });
     return changed;
 }
 function restoreCounts(pages, saved) {
@@ -5401,7 +5461,20 @@ function splitPage(page, className = "docx") {
         ...articles.flatMap(article => Array.from(article.children).map(block => ({ block, article }))),
         ...children.filter(c => c.tagName === "OL").map(block => ({ block, article: null })),
     ];
-    const over = flow.findIndex(f => !isBlank(f.block) && f.block.getBoundingClientRect().bottom > limitY);
+    const last = flow[flow.length - 1].block;
+    const end = (block) => block.getBoundingClientRect().bottom + (block === last ? parseFloat(getComputedStyle(block).marginBottom) || 0 : 0);
+    let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > limitY);
+    let splitLimit = limitY;
+    let keepNotes = false;
+    if (over > 0 && !flow[over].article && flow[over - 1].article) {
+        const bodyLimit = limitY - (end(last) - flow[over - 1].block.getBoundingClientRect().bottom);
+        const bodyOver = flow.findIndex(f => f.article && !isBlank(f.block) && f.block.getBoundingClientRect().bottom > bodyLimit);
+        if (bodyOver > 0 && bodyLimit - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT) {
+            over = bodyOver;
+            splitLimit = bodyLimit;
+            keepNotes = true;
+        }
+    }
     if (over < 0) {
         hideBlankOverflow(flow, limitY);
         return null;
@@ -5410,10 +5483,11 @@ function splitPage(page, className = "docx") {
     let cut = over;
     let carry = null;
     if (flow[over].block.tagName === "TABLE")
-        carry = splitTable(flow[over].block, limitY);
+        carry = splitTable(flow[over].block, splitLimit);
     else if (flow[over].block.tagName === "P")
-        carry = splitParagraph(flow[over].block, limitY, className);
-    if (carry || unbreakableHeight(flow[over].block) > pageSpace) {
+        carry = splitParagraph(flow[over].block, splitLimit, className);
+    const stays = !carry && unbreakableHeight(flow[over].block) > pageSpace;
+    if (carry || stays) {
         cut = over + 1;
     }
     else {
@@ -5422,7 +5496,7 @@ function splitPage(page, className = "docx") {
         if (cut === 0)
             cut = over || 1;
     }
-    if (!carry && flow.slice(cut).every(f => f.article && isBlank(f.block))) {
+    if (!carry && flow.slice(cut).every(f => f.article ? isBlank(f.block) : stays)) {
         hideBlankOverflow(flow, limitY);
         return null;
     }
@@ -5433,12 +5507,13 @@ function splitPage(page, className = "docx") {
     for (const f of flow.slice(cut)) {
         if (f.article)
             moved.set(f.article, [...(moved.get(f.article) ?? []), f.block]);
-        else
+        else if (!keepNotes)
             notes.push(f.block);
     }
     const next = page.cloneNode(false);
     next.removeAttribute("data-docx-first-page");
     next.removeAttribute("data-page-start");
+    next.removeAttribute("data-page-parity");
     for (const c of children) {
         if (c.tagName === "HEADER" && c.dataset.docxHf !== "first")
             next.appendChild(cloneWithTabStops(c));

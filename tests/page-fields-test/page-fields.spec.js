@@ -129,7 +129,18 @@ describe("Page fields and section breaks", function () {
     expect(shownText(div, "FOOTER")).toEqual(["1", "2"]);
   });
 
-  it("keeps the saved text of roman, nested and roman-section fields", async () => {
+  it("skips the page number Word gives its blank page before an odd-page section", async () => {
+    div = await render({
+      body: para("A") + sectionEnd(FOOTER + PAGE) + para("B"),
+      sectPr: `${FOOTER}<w:type w:val="oddPage"/>${PAGE}`,
+      parts: [part("rIdF", [`<w:p>${field("PAGE", "9")}${run(" of ")}${field("NUMPAGES", "9")}</w:p>`])],
+    });
+
+    expect(docx.paginate(div)).toBe(true);
+    expect(shownText(div, "FOOTER")).toEqual(["1 of 3", "3 of 3"]);
+  });
+
+  it("numbers a roman section and keeps the saved text of switched and nested fields", async () => {
     const ifField = r(fld("begin")) + r(instr("IF")) + field("PAGE", "7") + r(instr('= 1 "one" "other"')) + r(fld("separate")) + run("other") + r(fld("end"));
     div = await render({
       body: para("A") + sectionEnd(FOOTER + PAGE) + para("B"),
@@ -139,7 +150,7 @@ describe("Page fields and section breaks", function () {
 
     expect(docx.paginate(div)).toBe(true);
     const footers = pages(div).map(p => Array.from(shown(p, "FOOTER")[0].querySelectorAll("p")).map(e => e.textContent));
-    expect(footers).toEqual([["1", "ix", "7other"], ["9", "ix", "7other"]]);
+    expect(footers).toEqual([["1", "ix", "7other"], ["ii", "ix", "7other"]]);
     expect(div.querySelectorAll("footer p:nth-child(n+2) [data-docx-field]").length).toBe(0);
   });
 
