@@ -32,7 +32,8 @@
       + `<Relationship Id="rIdPic" Type="${REL}image" Target="media/p.png"/></Relationships>`);
     zip.file("word/media/p.png", PNG, { base64: true });
     if (firstHeaderLines)
-      zip.file("word/header2.xml", `<w:hdr ${NS}>${paras(firstHeaderLines, "Letterhead")}</w:hdr>`);
+      zip.file("word/header2.xml", `<w:hdr ${NS}>${Array.from({ length: firstHeaderLines }, (_, i) =>
+        `<w:p><w:pPr><w:spacing w:line="280" w:lineRule="exact"/></w:pPr><w:r><w:t>Letterhead ${i}</w:t></w:r></w:p>`).join("")}</w:hdr>`);
     if (footnotes)
       zip.file("word/footnotes.xml", `<w:footnotes ${NS}><w:footnote w:id="1">${para(footnotes)}</w:footnote></w:footnotes>`);
     zip.file("word/header1.xml", part("hdr", "Header"));
@@ -67,7 +68,9 @@
     });
 
     it("moves a block that only the next page can hold, under a tall first-page header", async () => {
-      const body = para("Title") + table(row(paras(26, "line"), para("b"), para("c")));
+      // exact heights keep the case independent of fonts: 15 x 14pt of letterhead leaves page 1 about 300pt, page 2 about 500pt
+      const tallRow = `<w:tr><w:trPr><w:trHeight w:val="8000" w:hRule="exact"/></w:trPr>${[para("a"), para("b"), para("c")].map(cell).join("")}</w:tr>`;
+      const body = para("Title") + table(tallRow);
 
       div = document.createElement("div");
       document.body.appendChild(div);
