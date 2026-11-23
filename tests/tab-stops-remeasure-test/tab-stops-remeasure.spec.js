@@ -105,6 +105,13 @@ ${body.join("\n")}
     expect(tabSpans(container)[2].style.borderBottomStyle).toBe("dotted");
   });
 
+  it("keeps a tab character in the text of a measured paragraph", async () => {
+    const container = await render(separateStops);
+    docx.remeasureTabStops(container);
+
+    expect(run(container, "Left").closest("p").textContent).toBe("a\tLeft");
+  });
+
   it("measures each tab of one paragraph after the tabs before it", async () => {
     const container = await render([
       paragraph(tabs(["left", 2880], ["center", 4680], ["right", 9360]), "a", "\t", "One", "\t", "Two", "\t", "Three"),

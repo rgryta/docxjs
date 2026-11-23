@@ -76,7 +76,9 @@ export function measureTabSpans(spans: HTMLElement[]): void {
 
 		for (const g of round) {
 			const span = g.spans[k];
-			span.textContent = "";
+			// a zero-size tab character keeps the tab in copied and searched text without taking room
+			span.textContent = "\t";
+			span.style.fontSize = "0";
 			span.style.display = "inline-block";
 			span.style.width = "0";
 		}
@@ -183,7 +185,7 @@ function segmentWidth(span: HTMLElement, next: HTMLElement | undefined, p: HTMLE
 
 	if (stopAt) {
 		const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
-		walker.currentNode = span;
+		walker.currentNode = span.lastChild ?? span;
 
 		for (let n = walker.nextNode(); n && range.isPointInRange(n, 0); n = walker.nextNode()) {
 			const i = n.textContent.indexOf(stopAt);
