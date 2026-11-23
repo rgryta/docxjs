@@ -1487,7 +1487,7 @@ export class DocumentParser {
 				if (multiple >= 0.005)
 					style["line-height"] = multiple.toFixed(2);
 			} else {
-				const length = /(mm|cm|in|pc|pi|pt)$/.test(line) ? convertLength(line, LengthUsage.Dxa) : `${parseInt(line) / 20}pt`;
+				const length = convertLength(line, LengthUsage.Dxa);
 
 				if (lineRule == "atLeast")
 					style["line-height"] = `calc(100% + ${length})`;
