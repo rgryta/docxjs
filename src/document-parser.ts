@@ -558,7 +558,7 @@ export class DocumentParser {
 					break;
 
 				case "ins":
-					result.children.push(this.parseChange(DomType.Inserted, el, e => this.parseParagraph(e, false)));
+					result.children.push(this.parseChange(DomType.Inserted, el, e => this.parseParagraph(e)));
 					break;
 
 				case "del":
@@ -886,37 +886,21 @@ export class DocumentParser {
 		let simplePos = xml.boolAttr(node, "simplePos");
 		let behindDoc = xml.boolAttr(node, "behindDoc");
 
-		let posX = { relative: "page", align: "left", offset: "0" };
-		let posY = { relative: "page", align: "top", offset: "0" };
+		let posX = { align: "left" };
 
 		for (var n of xml.elements(node)) {
 			switch (n.localName) {
-				case "simplePos":
-					if (simplePos) {
-						posX.offset = xml.lengthAttr(n, "x", LengthUsage.Emu);
-						posY.offset = xml.lengthAttr(n, "y", LengthUsage.Emu);
-					}
-					break;
-
 				case "extent":
 					result.cssStyle["width"] = xml.lengthAttr(n, "cx", LengthUsage.Emu);
 					result.cssStyle["height"] = xml.lengthAttr(n, "cy", LengthUsage.Emu);
 					break;
 
 				case "positionH":
-				case "positionV":
 					if (!simplePos) {
-						let pos = n.localName == "positionH" ? posX : posY;
 						var alignNode = xml.element(n, "align");
-						var offsetNode = xml.element(n, "posOffset");
-
-						pos.relative = xml.attr(n, "relativeFrom") ?? pos.relative;
 
 						if (alignNode)
-							pos.align = alignNode.textContent;
-
-						if (offsetNode)
-							pos.offset = convertLength(offsetNode.textContent, LengthUsage.Emu);
+							posX.align = alignNode.textContent;
 					}
 					break;
 

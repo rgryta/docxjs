@@ -67,7 +67,9 @@ const horizontalFrames: Record<string, [string, string]> = {
 	margin: textColumn,
 	column: textColumn,
 	leftMargin: ["0pt", marginLeft],
+	insideMargin: ["0pt", marginLeft],
 	rightMargin: [`(${pageWidth} - ${marginRight})`, marginRight],
+	outsideMargin: [`(${pageWidth} - ${marginRight})`, marginRight],
 };
 
 const verticalFrames: Record<string, [string, string]> = {
@@ -666,19 +668,21 @@ export class HtmlRenderer {
 		const result: Section[][] = [current];
 
 		for (let s of sections) {
-			if (s.elements.length) {
-				if (prev && (pageBreak || this.isPageBreakSection(prev.sectProps, s.sectProps) || this.isNewPageSection(prev.sectProps, s.sectProps)))
-					result.push(current = []);
-
-				prev = s;
-				pageBreak = false;
+			// an empty piece can carry the next section's props, which would give the open page that section's footer
+			if (!s.elements.length) {
+				pageBreak ||= s.pageBreak;
+				continue;
 			}
 
+			if (prev && (pageBreak || this.isPageBreakSection(prev.sectProps, s.sectProps) || this.isNewPageSection(prev.sectProps, s.sectProps)))
+				result.push(current = []);
+
+			prev = s;
 			current.push(s);
-			pageBreak ||= s.pageBreak;
+			pageBreak = s.pageBreak;
 		}
 
-		return result.filter(x => x.length > 0);
+		return current.length ? result : [[sections[0]]];
 	}
 
 	renderWrapper(children: HTMLElement[]) {
@@ -697,8 +701,7 @@ export class HtmlRenderer {
 .${c} { color: black; hyphens: ${this.document.settingsPart?.settings?.autoHyphenation ? "auto" : "manual"}; text-underline-position: from-font; }
 section.${c} { box-sizing: border-box; display: flex; flex-flow: column nowrap; position: relative; overflow: hidden; }
 section.${c}>article { margin-bottom: auto; z-index: 1; }
-section.${c}>header { z-index: 1; }
-section.${c}>footer { z-index: 1; }
+section.${c}>header, section.${c}>footer { z-index: 0; }
 .${c} table { border-collapse: collapse; }
 .${c} table td, .${c} table th { vertical-align: top; }
 .${c} p { margin: 0pt; min-height: 1em; --docx-run-line-height: initial; }
@@ -881,8 +884,8 @@ section.${c}>footer { z-index: 1; }
 				var selector = `${style.target ?? ''}.${style.cssName}`; //${subStyle.mod ?? ''}
 				const subTarget = style.target != subStyle.target ? ` ${subStyle.target}` : '';
 
-				// document defaults have no target and sit below every style
-				if (style.target == null)
+				// document defaults have no target; their run values sit below every style, their paragraph values still beat the base `p` reset
+				if (style.target == null && subStyle.target != "p")
 					selector = `:where(${selector})`;
 
 				selector += subTarget;
@@ -1698,7 +1701,6 @@ section.${c}>footer { z-index: 1; }
 		if (float) {
 			set("float", float.side);
 			set(float.side == "left" ? "margin-left" : "margin-right", pt(float.margin));
-			set("display", "block");
 		} else if (placed && left != null)
 			set("left", left);
 		else if (left != null)
@@ -1707,6 +1709,8 @@ section.${c}>footer { z-index: 1; }
 			set("margin-left", hStatic);
 
 		if (!placed) {
+			// keeps margin-left in a right-to-left paragraph
+			if (!float) set("margin-right", "auto");
 			if (anchor.v.offset != null) set("margin-top", pt(anchor.v.offset));
 			return;
 		}
@@ -1731,12 +1735,15 @@ section.${c}>footer { z-index: 1; }
 		const left = parseFloat(this.currentSectProps?.pageMargins?.left) || 0;
 		const right = parseFloat(this.currentSectProps?.pageMargins?.right) || 0;
 
-		if (!(page > 0))
+		// no cell width here, so a shape in a table cell takes the block path
+		if (!(page > 0) || this.currentCellPosition)
 			return null;
 
-		const column = page - left - right;
+		const count = this.currentSectProps.columns?.numberOfColumns || 1;
+		const textWidth = page - left - right;
+		const column = count > 1 ? (textWidth - (count - 1) * (parseFloat(this.currentSectProps.columns.space) || 0)) / count : textWidth;
 		const frames: Record<string, [number, number]> = {
-			page: [0, page], margin: [left, column], column: [left, column],
+			page: [0, page], margin: [left, textWidth], column: [left, column],
 			leftMargin: [0, left], insideMargin: [0, left], rightMargin: [page - right, right], outsideMargin: [page - right, right],
 		};
 		const [start, span] = hasOwn(frames, h.relative) ? frames[h.relative] : [left, column];
@@ -1760,11 +1767,13 @@ section.${c}>footer { z-index: 1; }
 
 		if (elem.wrapType == "topAndBottom") {
 			set("display", "block");
-			set("margin-left", box.hRelative == "page" ? `calc(${pt(box.x)} - var(--docx-margin-left, 0pt))` : pt(box.x));
+			const left = vmlEdge(vmlHorizontalFrames, box.hRelative ?? "text", box.hAlign, box.x, box.width);
+			set("margin-left", left == null ? pt(box.x) : `calc(${left} - var(--docx-margin-left, 0pt))`);
+			// shortcut: the offset is taken from the line, not the vertical frame; upgrade when a document needs page-placed top-and-bottom shapes
 			set("margin-top", pt(box.y));
 		} else if (box.position == "absolute") {
 			set("position", "absolute");
-			const left = vmlEdge(vmlHorizontalFrames, box.hRelative, box.hAlign, box.x, box.width);
+			const left = vmlEdge(vmlHorizontalFrames, box.hRelative ?? "text", box.hAlign, box.x, box.width);
 			const top = vmlEdge(vmlVerticalFrames, box.vRelative, box.vAlign, box.y, box.height);
 
 			if (left == null)

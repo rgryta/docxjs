@@ -4,6 +4,7 @@ describe("VML shapes", function () {
     'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"',
     'xmlns:v="urn:schemas-microsoft-com:vml"',
     'xmlns:o="urn:schemas-microsoft-com:office:office"',
+    'xmlns:w10="urn:schemas-microsoft-com:office:word"',
     'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"',
     'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"',
   ].join(" ");
@@ -21,6 +22,8 @@ describe("VML shapes", function () {
     para("case-h-margin", pict(`<v:rect style="position:absolute;margin-left:24pt;width:20pt;height:10pt;mso-position-horizontal-relative:margin;mso-position-vertical-relative:text"/>`)),
     para("case-h-centre", pict(`<v:rect style="position:absolute;mso-position-horizontal:center;mso-position-horizontal-relative:page;width:20pt;height:10pt;mso-position-vertical-relative:text"/>`)),
     para("case-h-right", pict(`<v:rect style="position:absolute;mso-position-horizontal:right;mso-position-horizontal-relative:margin;width:20pt;height:10pt;mso-position-vertical-relative:text"/>`)),
+    para("case-h-default", pict('<v:rect style="position:absolute;margin-left:100pt;mso-position-horizontal:center;width:50pt;height:10pt"/>')),
+    para("case-top-bottom", pict('<v:rect style="position:absolute;mso-position-horizontal:center;mso-position-horizontal-relative:margin;width:50pt;height:10pt"><w10:wrap type="topAndBottom"/></v:rect>')),
     para("case-v-centre", pict(`<v:rect style="position:absolute;mso-position-horizontal:center;mso-position-horizontal-relative:page;mso-position-vertical:center;mso-position-vertical-relative:page;width:20pt;height:10pt"/>`)),
     para("case-aligned-offset", pict(`<v:rect style="position:absolute;mso-position-horizontal:center;mso-position-horizontal-relative:page;margin-top:30pt;mso-position-vertical-relative:page;width:20pt;height:10pt"/>`)),
     para("case-margin-area", pict(`<v:rect style="position:absolute;mso-position-horizontal:left;mso-position-horizontal-relative:margin;mso-position-vertical:bottom;mso-position-vertical-relative:top-margin-area;width:20pt;height:10pt"/>`)),
@@ -49,7 +52,8 @@ describe("VML shapes", function () {
   ].join("\n");
 
   const footer = `<w:ftr ${NS}><w:p>${pict(`<v:rect style="${PAGE}margin-top:176pt;width:50pt;height:12pt;mso-position-vertical-relative:page"/>`)}` +
-    `${pict(`<v:rect fillcolor="#00ff00" style="${PAGE}margin-left:200pt;margin-top:20pt;width:30pt;height:12pt;mso-position-vertical-relative:margin"/>`)}</w:p></w:ftr>`;
+    `${pict(`<v:rect fillcolor="#00ff00" style="${PAGE}margin-left:200pt;margin-top:20pt;width:30pt;height:12pt;mso-position-vertical-relative:margin"/>`)}` +
+    `${pict(`<v:rect fillcolor="#0000ff" style="${PAGE}width:612pt;height:200pt;z-index:-1;mso-position-vertical-relative:page"/>`)}</w:p></w:ftr>`;
 
   const header = `<w:hdr ${NS}><w:p>${pict(`<v:rect style="${PAGE}width:50pt;height:12pt;z-index:-1;mso-position-vertical-relative:page"/>`)}</w:p></w:hdr>`;
 
@@ -120,6 +124,16 @@ ${body}
     const page = rect(section());
     expectNear(rect(shapeBox("case-h-centre")).left + rect(shapeBox("case-h-centre")).width / 2 - page.left, page.width / 2);
     expectNear(rect(shapeBox("case-h-right")).right - page.left, page.width - 96);
+  });
+
+  it("aligns a shape with no horizontal relative to the text column", () => {
+    const box = rect(shapeBox("case-h-default"));
+    expectNear(box.left + box.width / 2 - rect(section()).left, rect(section()).width / 2);
+  });
+
+  it("centres a top-and-bottom wrapped shape in its frame", () => {
+    const box = rect(shapeBox("case-top-bottom"));
+    expectNear(box.left + box.width / 2 - rect(section()).left, rect(section()).width / 2);
   });
 
   it("takes the fill colour and opacity from v:fill", () => {
@@ -228,8 +242,19 @@ ${body}
     expect(reason("case-watermark-bare")).toBe("watermark");
   });
 
-  it("keeps a shape behind the text visible in the header", () => {
-    expect(getComputedStyle(section().querySelector("header")).zIndex).toBe("1");
+  it("keeps a shape behind the text visible in the header and footer", () => {
+    expect(getComputedStyle(section().querySelector("header")).zIndex).toBe("0");
+    expect(getComputedStyle(section().querySelector("footer")).zIndex).toBe("0");
+  });
+
+  it("paints a footer shape behind the text under the body text", () => {
+    const text = paragraph("filler-19").querySelector("span");
+    text.scrollIntoView({ block: "center" });
+    const box = rect(text);
+    const hit = document.elementFromPoint(box.left + 2, box.top + box.height / 2);
+    window.scrollTo(0, 0);
+    expect(rect(section().querySelector('footer svg rect[fill="#0000ff"]')).top).toBeLessThan(rect(text).top);
+    expect(text.contains(hit)).toBeTrue();
   });
 
   it("keeps clicks on a VML picture but lets them through a drawn shape", () => {

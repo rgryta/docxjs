@@ -71,6 +71,8 @@ describe("Shape groups", function () {
       box("123456", 0, 0, 50, 50),
       box("654321", 100, 0, 50, 50).replace("<wps:wsp>", '<wps:wsp><wps:cNvPr id="7" name="h" hidden="1"/>'),
       picture(xfrm({ x: 0, y: 60 * PT, w: 40 * PT, h: 20 * PT })).replace('<pic:cNvPr id="2" name="p"/>', '<pic:cNvPr id="2" name="p" hidden="1"/>')))))),
+    para("case-vml-hidden", run(pict('<v:group style="width:100pt;height:50pt" coordsize="100,50"><v:rect style="width:10;height:5" fillcolor="#123456"/>' +
+      '<v:group style="width:50;height:50;visibility:hidden" coordsize="50,50"><v:rect style="width:10;height:5" fillcolor="#654321"/></v:group></v:group>'))),
     para("case-flip-picture", run(inline(200, 100, groupGraphic(wgp(identity(200, 100, ' flipH="1"'),
       picture(xfrm({ x: 0, y: 0, w: 40 * PT, h: 20 * PT }))))))),
     para("case-flip-cropped", run(inline(200, 100, groupGraphic(wgp(identity(200, 100, ' flipH="1"'),
@@ -182,6 +184,7 @@ ${body}
     const heads = paragraph("case-vml-arrow").querySelectorAll("svg path");
     expect(heads.length).toBe(1);
     expect(heads[0].getAttribute("fill")).toBe("black");
+    expectNear(rect(paragraph("case-vml-arrow").querySelector("svg line")).right, rect(heads[0]).left);
   });
 
   it("skips group children the author hid", () => {
@@ -189,6 +192,11 @@ ${body}
     expect(filled(group, "#123456").length).toBe(1);
     expect(filled(group, "#654321").length).toBe(0);
     expect(group.querySelector("img")).toBeNull();
+  });
+
+  it("skips a nested VML group the author hid", () => {
+    expect(filled(paragraph("case-vml-hidden"), "#123456").length).toBe(1);
+    expect(filled(paragraph("case-vml-hidden"), "#654321").length).toBe(0);
   });
 
   it("mirrors a picture in a flipped group", () => {

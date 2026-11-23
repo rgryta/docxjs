@@ -1492,6 +1492,8 @@ function parseVmlElement(elem, parser, watermarkAllowed = false, frame = null) {
 function parseVmlGroup(elem, parser, frame) {
     const style = parseVmlStyle(globalXmlParser.attr(elem, "style"));
     const box = parseBox(style);
+    if (frame && box.hidden)
+        return null;
     const mapped = frame && placeChild(frame, groupRect(style), false, box.rotation ?? 0);
     const width = frame ? mapped?.width : box.width;
     const height = frame ? mapped?.height : box.height;
@@ -1543,6 +1545,8 @@ function lineHeads(stroke, line, box, paint) {
             return [markPart("partial")];
         const scale = (name) => arrowScale[(globalXmlParser.attr(stroke, `${["start", "end"][i]}arrow${name}`) ?? "").trim().toLowerCase()] ?? 3;
         const d = arrowHead(ends[i], ends[1 - i], paint.strokeWidth, scale("width"), scale("length"));
+        const [bx, by] = arrowBase(ends[i], ends[1 - i], paint.strokeWidth, scale("length"));
+        Object.assign(line, i ? { x2: formatNumber(bx), y2: formatNumber(by) } : { x1: formatNumber(bx), y1: formatNumber(by) });
         return [{ tagName: "path", attrs: { d, fill: paint.stroke, stroke: "none" } }];
     });
 }
@@ -2007,9 +2011,6 @@ function parseStyleRef(style, name) {
     return ref ? { idx: integer(globalXmlParser.attr(ref, "idx")), color: parseColor(ref) } : null;
 }
 function parseShapeDrawing(node, shape, nested) {
-    const docPr = globalXmlParser.element(node, "docPr");
-    if (docPr && globalXmlParser.boolAttr(docPr, "hidden", false))
-        return null;
     const extent = globalXmlParser.element(node, "extent");
     const simplePos = globalXmlParser.boolAttr(node, "simplePos", false) && globalXmlParser.element(node, "simplePos");
     const axis = (name) => {
@@ -2658,7 +2659,7 @@ class DocumentParser {
                     result.children.push(...this.parseSdt(el, e => this.parseParagraph(e, false).children));
                     break;
                 case "ins":
-                    result.children.push(this.parseChange(DomType.Inserted, el, e => this.parseParagraph(e, false)));
+                    result.children.push(this.parseChange(DomType.Inserted, el, e => this.parseParagraph(e)));
                     break;
                 case "del":
                     result.children.push(this.parseChange(DomType.Deleted, el, e => this.parseParagraph(e, false)));
@@ -2926,31 +2927,18 @@ class DocumentParser {
         let wrapType = null;
         let simplePos = globalXmlParser.boolAttr(node, "simplePos");
         globalXmlParser.boolAttr(node, "behindDoc");
-        let posX = { relative: "page", align: "left", offset: "0" };
-        let posY = { relative: "page", align: "top", offset: "0" };
+        let posX = { align: "left" };
         for (var n of globalXmlParser.elements(node)) {
             switch (n.localName) {
-                case "simplePos":
-                    if (simplePos) {
-                        posX.offset = globalXmlParser.lengthAttr(n, "x", LengthUsage.Emu);
-                        posY.offset = globalXmlParser.lengthAttr(n, "y", LengthUsage.Emu);
-                    }
-                    break;
                 case "extent":
                     result.cssStyle["width"] = globalXmlParser.lengthAttr(n, "cx", LengthUsage.Emu);
                     result.cssStyle["height"] = globalXmlParser.lengthAttr(n, "cy", LengthUsage.Emu);
                     break;
                 case "positionH":
-                case "positionV":
                     if (!simplePos) {
-                        let pos = n.localName == "positionH" ? posX : posY;
                         var alignNode = globalXmlParser.element(n, "align");
-                        var offsetNode = globalXmlParser.element(n, "posOffset");
-                        pos.relative = globalXmlParser.attr(n, "relativeFrom") ?? pos.relative;
                         if (alignNode)
-                            pos.align = alignNode.textContent;
-                        if (offsetNode)
-                            pos.offset = convertLength(offsetNode.textContent, LengthUsage.Emu);
+                            posX.align = alignNode.textContent;
                     }
                     break;
                 case "wrapTopAndBottom":
@@ -3748,6 +3736,7 @@ function measureTabSpans(spans) {
             const span = g.spans[k];
             span.textContent = "\t";
             span.style.fontSize = "0";
+            span.style.whiteSpace = "pre";
             span.style.display = "inline-block";
             span.style.width = "0";
         }
@@ -3766,18 +3755,19 @@ function reset(span) {
     span.textContent = "\u2003";
 }
 function groupByParagraph(spans) {
-    const sorted = [...spans].sort((a, b) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
     const groups = new Map();
-    for (const span of sorted) {
+    for (const span of spans) {
         const p = span.closest("p");
         let group = groups.get(p);
         if (!group) {
             const { stops, defaultTabSize } = registered.get(span);
             const all = (stops ?? []).map(t => ({ pos: lengthToPoint(t.position), leader: t.leader, style: t.style }));
+            const pcs = getComputedStyle(p);
+            const indent = parseFloat(pcs.textIndent) < 0 ? [{ pos: parseFloat(pcs.marginLeft) * 0.75, leader: "none", style: "left" }] : [];
             group = {
                 p,
                 spans: [],
-                stops: all.filter(t => t.style != "clear" && t.style != "bar").sort((a, b) => a.pos - b.pos),
+                stops: [...all.filter(t => t.style != "clear" && t.style != "bar"), ...indent].sort((a, b) => a.pos - b.pos),
                 clears: all.filter(t => t.style == "clear").map(t => t.pos),
                 defaultTabSize: lengthToPoint(defaultTabSize) || 36,
             };
@@ -3912,7 +3902,9 @@ const horizontalFrames = {
     margin: textColumn,
     column: textColumn,
     leftMargin: ["0pt", marginLeft],
+    insideMargin: ["0pt", marginLeft],
     rightMargin: [`(${pageWidth} - ${marginRight})`, marginRight],
+    outsideMargin: [`(${pageWidth} - ${marginRight})`, marginRight],
 };
 const verticalFrames = {
     page: ["0pt", pageHeight],
@@ -4379,16 +4371,17 @@ class HtmlRenderer {
         let pageBreak = false;
         const result = [current];
         for (let s of sections) {
-            if (s.elements.length) {
-                if (prev && (pageBreak || this.isPageBreakSection(prev.sectProps, s.sectProps) || this.isNewPageSection(prev.sectProps, s.sectProps)))
-                    result.push(current = []);
-                prev = s;
-                pageBreak = false;
+            if (!s.elements.length) {
+                pageBreak || (pageBreak = s.pageBreak);
+                continue;
             }
+            if (prev && (pageBreak || this.isPageBreakSection(prev.sectProps, s.sectProps) || this.isNewPageSection(prev.sectProps, s.sectProps)))
+                result.push(current = []);
+            prev = s;
             current.push(s);
-            pageBreak || (pageBreak = s.pageBreak);
+            pageBreak = s.pageBreak;
         }
-        return result.filter(x => x.length > 0);
+        return current.length ? result : [[sections[0]]];
     }
     renderWrapper(children) {
         return this.h({ tagName: "div", className: `${this.className}-wrapper`, children });
@@ -4405,8 +4398,7 @@ class HtmlRenderer {
 .${c} { color: black; hyphens: ${this.document.settingsPart?.settings?.autoHyphenation ? "auto" : "manual"}; text-underline-position: from-font; }
 section.${c} { box-sizing: border-box; display: flex; flex-flow: column nowrap; position: relative; overflow: hidden; }
 section.${c}>article { margin-bottom: auto; z-index: 1; }
-section.${c}>header { z-index: 1; }
-section.${c}>footer { z-index: 1; }
+section.${c}>header, section.${c}>footer { z-index: 0; }
 .${c} table { border-collapse: collapse; }
 .${c} table td, .${c} table th { vertical-align: top; }
 .${c} p { margin: 0pt; min-height: 1em; --docx-run-line-height: initial; }
@@ -4505,7 +4497,7 @@ section.${c}>footer { z-index: 1; }
             for (const subStyle of subStyles) {
                 var selector = `${style.target ?? ''}.${style.cssName}`;
                 const subTarget = style.target != subStyle.target ? ` ${subStyle.target}` : '';
-                if (style.target == null)
+                if (style.target == null && subStyle.target != "p")
                     selector = `:where(${selector})`;
                 selector += subTarget;
                 if (defautStyles[style.target] == style) {
@@ -5112,7 +5104,6 @@ section.${c}>footer { z-index: 1; }
         if (float) {
             set("float", float.side);
             set(float.side == "left" ? "margin-left" : "margin-right", pt(float.margin));
-            set("display", "block");
         }
         else if (placed && left != null)
             set("left", left);
@@ -5121,6 +5112,8 @@ section.${c}>footer { z-index: 1; }
         else if (hStatic)
             set("margin-left", hStatic);
         if (!placed) {
+            if (!float)
+                set("margin-right", "auto");
             if (anchor.v.offset != null)
                 set("margin-top", pt(anchor.v.offset));
             return;
@@ -5138,11 +5131,13 @@ section.${c}>footer { z-index: 1; }
         const page = parseFloat(this.currentSectProps?.pageSize?.width);
         const left = parseFloat(this.currentSectProps?.pageMargins?.left) || 0;
         const right = parseFloat(this.currentSectProps?.pageMargins?.right) || 0;
-        if (!(page > 0))
+        if (!(page > 0) || this.currentCellPosition)
             return null;
-        const column = page - left - right;
+        const count = this.currentSectProps.columns?.numberOfColumns || 1;
+        const textWidth = page - left - right;
+        const column = count > 1 ? (textWidth - (count - 1) * (parseFloat(this.currentSectProps.columns.space) || 0)) / count : textWidth;
         const frames = {
-            page: [0, page], margin: [left, column], column: [left, column],
+            page: [0, page], margin: [left, textWidth], column: [left, column],
             leftMargin: [0, left], insideMargin: [0, left], rightMargin: [page - right, right], outsideMargin: [page - right, right],
         };
         const [start, span] = hasOwn(frames, h.relative) ? frames[h.relative] : [left, column];
@@ -5165,12 +5160,13 @@ section.${c}>footer { z-index: 1; }
             set("min-height", "1px");
         if (elem.wrapType == "topAndBottom") {
             set("display", "block");
-            set("margin-left", box.hRelative == "page" ? `calc(${pt(box.x)} - var(--docx-margin-left, 0pt))` : pt(box.x));
+            const left = vmlEdge(vmlHorizontalFrames, box.hRelative ?? "text", box.hAlign, box.x, box.width);
+            set("margin-left", left == null ? pt(box.x) : `calc(${left} - var(--docx-margin-left, 0pt))`);
             set("margin-top", pt(box.y));
         }
         else if (box.position == "absolute") {
             set("position", "absolute");
-            const left = vmlEdge(vmlHorizontalFrames, box.hRelative, box.hAlign, box.x, box.width);
+            const left = vmlEdge(vmlHorizontalFrames, box.hRelative ?? "text", box.hAlign, box.x, box.width);
             const top = vmlEdge(vmlVerticalFrames, box.vRelative, box.vAlign, box.y, box.height);
             if (left == null)
                 set("margin-left", pt(box.x));
@@ -5550,14 +5546,14 @@ function splitPage(page, className = "docx", nextNumber) {
     ];
     const last = flow[flow.length - 1].block;
     const end = (block) => block.getBoundingClientRect().bottom + (block === last ? parseFloat(getComputedStyle(block).marginBottom) || 0 : 0);
-    const bodyEnd = notesLimit;
-    let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > bodyEnd);
-    let splitLimit = bodyEnd;
+    let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > (f.article ? notesLimit : limitY));
+    let splitLimit = notesLimit;
     let keepNotes = false;
     if (over > 0 && !flow[over].article && flow[over - 1].article) {
         const bodyLimit = limitY - (end(last) - flow[over - 1].block.getBoundingClientRect().bottom);
         const bodyOver = flow.findIndex(f => f.article && !isBlank(f.block) && f.block.getBoundingClientRect().bottom > bodyLimit);
-        if (bodyOver > 0 && bodyLimit - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT) {
+        if (bodyOver > 0 && bodyLimit - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT
+            && refs.filter(r => flow.slice(0, bodyOver).some(f => f.block.contains(r))).length >= keptNotes) {
             over = bodyOver;
             splitLimit = bodyLimit;
             keepNotes = true;

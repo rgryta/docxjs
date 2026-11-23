@@ -97,6 +97,7 @@ export function measureTabSpans(spans: HTMLElement[]): void {
 			// a zero-size tab character keeps the tab in copied and searched text without taking room
 			span.textContent = "\t";
 			span.style.fontSize = "0";
+			span.style.whiteSpace = "pre";
 			span.style.display = "inline-block";
 			span.style.width = "0";
 		}
@@ -118,21 +119,23 @@ function reset(span: HTMLElement) {
 }
 
 function groupByParagraph(spans: HTMLElement[]): TabGroup[] {
-	const sorted = [...spans].sort((a, b) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
 	const groups = new Map<HTMLElement, TabGroup>();
 
-	for (const span of sorted) {
+	for (const span of spans) {
 		const p = span.closest("p");
 		let group = groups.get(p);
 
 		if (!group) {
 			const { stops, defaultTabSize } = registered.get(span);
 			const all = (stops ?? []).map(t => ({ pos: lengthToPoint(t.position), leader: t.leader, style: t.style }));
+			const pcs = getComputedStyle(p);
+			// Word uses the left indent of a hanging indent as a tab stop
+			const indent = parseFloat(pcs.textIndent) < 0 ? [{ pos: parseFloat(pcs.marginLeft) * 0.75, leader: "none", style: "left" }] : [];
 			group = {
 				p,
 				spans: [],
 				// a bar tab draws a line and is never a tab target
-				stops: all.filter(t => t.style != "clear" && t.style != "bar").sort((a, b) => a.pos - b.pos),
+				stops: [...all.filter(t => t.style != "clear" && t.style != "bar"), ...indent].sort((a, b) => a.pos - b.pos),
 				clears: all.filter(t => t.style == "clear").map(t => t.pos),
 				defaultTabSize: lengthToPoint(defaultTabSize) || 36,
 			};

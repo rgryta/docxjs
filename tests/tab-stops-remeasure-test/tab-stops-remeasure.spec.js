@@ -106,10 +106,19 @@ ${body.join("\n")}
   });
 
   it("keeps a tab character in the text of a measured paragraph", async () => {
+    // a host page that resets span white-space must not drop the tab from the text
+    const override = document.createElement("style");
+    override.textContent = "body .docx span { white-space: normal; }";
+    document.head.appendChild(override);
     const container = await render(separateStops);
     docx.remeasureTabStops(container);
 
-    expect(run(container, "Left").closest("p").textContent).toBe("a\tLeft");
+    try {
+      expect(run(container, "Left").closest("p").innerText).toBe("a\tLeft");
+      expectAt(run(container, "Left").getBoundingClientRect().left, container, 144, "left");
+    } finally {
+      override.remove();
+    }
   });
 
   it("measures each tab of one paragraph after the tabs before it", async () => {
@@ -130,6 +139,18 @@ ${body.join("\n")}
     docx.remeasureTabStops(container);
 
     expectAt(run(container, "Indented").getBoundingClientRect().right, container, 468, "right");
+  });
+
+  it("uses the left indent of a hanging indent as the first stop", async () => {
+    const hanging = '<w:ind w:left="1080" w:hanging="360"/>';
+    const container = await render([
+      paragraph(hanging, "a", "\t", "Bullet"),
+      paragraph(hanging + tabs(["left", 900]), "b", "\t", "Declared"),
+    ]);
+    docx.remeasureTabStops(container);
+
+    expectAt(run(container, "Bullet").getBoundingClientRect().left, container, 54, "indent");
+    expectAt(run(container, "Declared").getBoundingClientRect().left, container, 45, "declared before indent");
   });
 
   it("gives the same widths on every call and follows a changed layout", async () => {

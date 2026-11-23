@@ -228,11 +228,6 @@ function parseStyleRef(style: Element, name: string): DmlStyleRef {
 }
 
 export function parseShapeDrawing(node: Element, shape: OpenXmlElement, nested: boolean): DmlDrawing {
-	const docPr = xml.element(node, "docPr");
-
-	if (docPr && xml.boolAttr(docPr, "hidden", false))
-		return null;
-
 	const extent = xml.element(node, "extent");
 	const simplePos = xml.boolAttr(node, "simplePos", false) && xml.element(node, "simplePos");
 	const axis = (name: string): DmlAxis => {

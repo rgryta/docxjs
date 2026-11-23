@@ -101,6 +101,18 @@ describe("Page fields and section breaks", function () {
     expect(shownText(div, "FOOTER")).toEqual(["1", "2"]);
   });
 
+  it("gives a page-break-before paragraph after a section end its own section's footer", async () => {
+    div = await render({
+      body: para("A") + pageBreak + para("A2") + sectionEnd(`<w:footerReference w:type="default" r:id="rIdS1"/>${PAGE}`)
+        + `<w:p><w:pPr><w:pageBreakBefore/></w:pPr>${run("B")}</w:p>` + pageBreak + para("C"),
+      sectPr: `<w:footerReference w:type="first" r:id="rIdF1"/>${FOOTER}<w:titlePg/><w:pgNumType w:start="1"/>${PAGE}`,
+      parts: [part("rIdS1", [para("s1")]), part("rIdF1", [para("first")]), pageFooter()],
+    });
+
+    expect(docx.paginate(div)).toBe(true);
+    expect(shownText(div, "FOOTER")).toEqual(["s1", "s1", "first", "2"]);
+  });
+
   it("fills PAGE and NUMPAGES in the number run's formatting", async () => {
     const rPr = '<w:b/><w:sz w:val="18"/>';
     div = await render({
@@ -174,6 +186,14 @@ describe("Page fields and section breaks", function () {
 
     expect(docx.paginate(div)).toBe(true);
     expect(shownText(div, "FOOTER")).toEqual(["7"]);
+  });
+
+  it("fills a PAGE field inside a tracked insertion", async () => {
+    const inserted = `<w:ins w:id="1" w:author="a" w:date="2020-01-01T00:00:00Z">${field("PAGE", "9")}</w:ins>`;
+    div = await render({ body: para("A") + pageBreak + para("B"), sectPr: FOOTER + PAGE, parts: [part("rIdF", [`<w:p>${inserted}</w:p>`])] });
+
+    expect(docx.paginate(div)).toBe(true);
+    expect(shownText(div, "FOOTER")).toEqual(["1", "2"]);
   });
 
   it("writes the number into a field result run that has no text", async () => {

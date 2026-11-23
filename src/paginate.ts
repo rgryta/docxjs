@@ -229,9 +229,9 @@ export function splitPage(page: HTMLElement, className: string = "docx", nextNum
 	// the page also grows by the last block's bottom margin: margins do not collapse in the page's flex column
 	const last = flow[flow.length - 1].block;
 	const end = (block: HTMLElement) => block.getBoundingClientRect().bottom + (block === last ? parseFloat(getComputedStyle(block).marginBottom) || 0 : 0);
-	const bodyEnd = notesLimit;
-	let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > bodyEnd);
-	let splitLimit = bodyEnd;
+	// lists sit below the footnotes, so only the body gives up the footnotes' room
+	let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > (f.article ? notesLimit : limitY));
+	let splitLimit = notesLimit;
 	let keepNotes = false;
 
 	// Notes that do not fit push the last body lines down, as in Word, instead of taking a page of their own.
@@ -239,7 +239,8 @@ export function splitPage(page: HTMLElement, className: string = "docx", nextNum
 		const bodyLimit = limitY - (end(last) - flow[over - 1].block.getBoundingClientRect().bottom);
 		const bodyOver = flow.findIndex(f => f.article && !isBlank(f.block) && f.block.getBoundingClientRect().bottom > bodyLimit);
 
-		if (bodyOver > 0 && bodyLimit - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT) {
+		if (bodyOver > 0 && bodyLimit - articles[0].getBoundingClientRect().top >= MIN_SPLIT_HEIGHT
+			&& refs.filter(r => flow.slice(0, bodyOver).some(f => f.block.contains(r))).length >= keptNotes) {
 			over = bodyOver;
 			splitLimit = bodyLimit;
 			keepNotes = true;
