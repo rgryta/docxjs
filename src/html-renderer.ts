@@ -703,7 +703,7 @@ section.${c}>footer { z-index: 1; }
 				var selector = `${style.target ?? ''}.${style.cssName}${subTarget}`; //${subStyle.mod ?? ''} 
 
 				if (defautStyles[style.target] == style)
-					selector = `.${this.className} ${style.target}${subTarget}, ` + selector;
+					selector = `${subTarget ? `:where(.${this.className})` : `.${this.className}`} ${style.target}${subTarget}, ` + selector;
 
 				styleText += this.styleToString(selector, subStyle.values);
 			}
