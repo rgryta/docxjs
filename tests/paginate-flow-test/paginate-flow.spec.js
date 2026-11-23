@@ -159,6 +159,22 @@
       headers.forEach((text, i) => expect(text).toBe(i % 2 ? "Even" : "Odd"));
     });
 
+    it("keeps the rendered header when paginate is called without the paginate option", async () => {
+      div = await render({
+        body: paras(16) + pageBreak + paras(1),
+        sectPr: `<w:headerReference w:type="default" r:id="rIdD"/><w:headerReference w:type="even" r:id="rIdE"/>${PAGE}`,
+        parts: [
+          headerPart("rIdD", "Odd"), headerPart("rIdE", "Even"),
+          { id: "rIdS", type: "settings", target: "settings.xml", content: `<w:settings ${NS}><w:evenAndOddHeaders/></w:settings>` },
+        ],
+      });
+
+      docx.paginate(div);
+
+      expect(pages(div).length).toBeGreaterThanOrEqual(3);
+      pages(div).forEach((page, i) => expect(shown(page, "HEADER").length).withContext(`page ${i + 1}`).toBe(1));
+    });
+
     it("keeps a footnote on the page of its reference", async () => {
       div = await render({
         body: `<w:p>${run(lorem(2))}<w:r><w:footnoteReference w:id="1"/></w:r></w:p>` + paras(24),

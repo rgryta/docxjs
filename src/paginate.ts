@@ -206,6 +206,10 @@ function showHeaderFooter(page: HTMLElement, index: number) {
 			?? (index % 2 == 1 ? find("even") : null)
 			?? find("default");
 
+		// without the paginate option only the renderer's pick exists; keep it rather than hide every header
+		if (!pick)
+			continue;
+
 		for (const c of alternates) {
 			if ((c === pick) === (c.style.display === "none"))
 				c.style.display = c === pick ? "" : "none";
