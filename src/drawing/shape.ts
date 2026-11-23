@@ -279,7 +279,8 @@ function parseGroup(group: Element, parser: DocumentParser, width: number, heigh
 
 	const children = parser.nested(() => xml.elements(group)
 		.filter(child => !groupProps.has(child.localName))
-		.map(child => parseGroupChild(child, parser, frame)));
+		.map(child => parseGroupChild(child, parser, frame))
+		.filter(child => child != null));
 
 	if (!children)
 		return notDrawn("depth");
@@ -291,8 +292,19 @@ function parseGroup(group: Element, parser: DocumentParser, width: number, heigh
 	return result;
 }
 
+/** Whether the author hid a group child: its cNvPr sits in the nv*Pr wrapper, or directly in a shape. */
+function isHidden(child: Element): boolean {
+	const wrapper = xml.elements(child).find(el => el.localName.startsWith("nv") && el.localName.endsWith("Pr"));
+	const cNvPr = xml.element(wrapper ?? child, "cNvPr");
+	return !!cNvPr && xml.boolAttr(cNvPr, "hidden", false);
+}
+
+/** Parses one child of a group, or returns null for a hidden one. */
 function parseGroupChild(child: Element, parser: DocumentParser, frame: GroupFrame): OpenXmlElement {
 	const kind = child.localName;
+
+	if (isHidden(child))
+		return null;
 
 	if (kind == "wsp" ? !isDrawableShape(child, true) : kind != "grpSp" && kind != "pic")
 		return notDrawn("group-child");
@@ -306,8 +318,12 @@ function parseGroupChild(child: Element, parser: DocumentParser, frame: GroupFra
 	if (!mapped)
 		return notDrawn("group-child");
 
-	if (kind == "pic")
-		return { ...parser.parsePicture(child), cssStyle: {}, rotation: 0, place: mapped.place } as IDomImage;
+	if (kind == "pic") {
+		const flipH = frame.flipH != (!!xfrm && xml.boolAttr(xfrm, "flipH", false));
+		const flipV = frame.flipV != (!!xfrm && xml.boolAttr(xfrm, "flipV", false));
+		const cssStyle = flipH || flipV ? { transform: `scale(${flipH ? -1 : 1}, ${flipV ? -1 : 1})` } : {};
+		return { ...parser.parsePicture(child), cssStyle, rotation: 0, place: mapped.place } as IDomImage;
+	}
 
 	const result = kind == "grpSp" ? parseGroup(child, parser, mapped.width, mapped.height, frame.flipH, frame.flipV) : parseShape(child, parser);
 
