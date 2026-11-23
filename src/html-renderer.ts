@@ -41,44 +41,6 @@ declare const Highlight: any;
 
 type CellVerticalMergeType = Record<number, HTMLTableCellElement>;
 
-// [start, length] of the frames a VML shape positions against, per mso-position-*-relative value
-const vmlPageWidth = "var(--docx-page-width, 100%)";
-const vmlPageHeight = "var(--docx-page-height, 100%)";
-const vmlMarginLeft = "var(--docx-margin-left, 0pt)";
-const vmlMarginRight = "var(--docx-margin-right, 0pt)";
-const vmlMarginTop = "var(--docx-margin-top, 0pt)";
-const vmlMarginBottom = "var(--docx-margin-bottom, 0pt)";
-const vmlTextColumn: [string, string] = [vmlMarginLeft, `(${vmlPageWidth} - ${vmlMarginLeft} - ${vmlMarginRight})`];
-const vmlLeftArea: [string, string] = ["0pt", vmlMarginLeft];
-const vmlRightArea: [string, string] = [`(${vmlPageWidth} - ${vmlMarginRight})`, vmlMarginRight];
-const vmlTopArea: [string, string] = ["0pt", vmlMarginTop];
-const vmlBottomArea: [string, string] = [`(${vmlPageHeight} - ${vmlMarginBottom})`, vmlMarginBottom];
-const vmlHorizontalFrames = new Map<string, [string, string]>([
-	["page", ["0pt", vmlPageWidth]], ["margin", vmlTextColumn], ["text", vmlTextColumn],
-	["left-margin-area", vmlLeftArea], ["inner-margin-area", vmlLeftArea], ["right-margin-area", vmlRightArea], ["outer-margin-area", vmlRightArea],
-]);
-const vmlVerticalFrames = new Map<string, [string, string]>([
-	["page", ["0pt", vmlPageHeight]], ["margin", [vmlMarginTop, `(${vmlPageHeight} - ${vmlMarginTop} - ${vmlMarginBottom})`]],
-	["top-margin-area", vmlTopArea], ["inner-margin-area", vmlTopArea], ["bottom-margin-area", vmlBottomArea], ["outer-margin-area", vmlBottomArea],
-]);
-// where an aligned shape sits in its frame, as a share of the room left; inside and outside are taken as left and right
-const vmlAlignShare = new Map([["left", 0], ["top", 0], ["inside", 0], ["center", 0.5], ["right", 1], ["bottom", 1], ["outside", 1]]);
-
-/** The CSS start of a VML shape along one axis, or null when it keeps its place in the line (no frame). */
-function vmlEdge(frames: Map<string, [string, string]>, relative: string, align: string, offset: number, size: number): string {
-	const frame = frames.get(relative);
-
-	if (!frame)
-		return null;
-
-	const [start, length] = frame;
-	const share = vmlAlignShare.get(align);
-
-	return share == null || size == null
-		? `calc(${start} + ${formatNumber(offset)}pt)`
-		: `calc(${start} + (${length} - ${formatNumber(size)}pt) * ${share})`;
-}
-
 const pageVariableNames = ["--docx-page-width", "--docx-page-height", "--docx-margin-left", "--docx-margin-right", "--docx-margin-top", "--docx-margin-bottom"] as const;
 
 interface ShapeContent {
@@ -112,6 +74,35 @@ const verticalFrames: Record<string, [string, string]> = {
 	topMargin: ["0pt", marginTop],
 	bottomMargin: [`(${pageHeight} - ${marginBottom})`, marginBottom],
 };
+
+// the frames a VML shape positions against, per mso-position-*-relative value (the same frames as DrawingML)
+const vmlHorizontalFrames = new Map<string, [string, string]>([
+	["page", horizontalFrames.page], ["margin", textColumn], ["text", textColumn],
+	["left-margin-area", horizontalFrames.leftMargin], ["inner-margin-area", horizontalFrames.leftMargin],
+	["right-margin-area", horizontalFrames.rightMargin], ["outer-margin-area", horizontalFrames.rightMargin],
+]);
+const vmlVerticalFrames = new Map<string, [string, string]>([
+	["page", verticalFrames.page], ["margin", verticalFrames.margin],
+	["top-margin-area", verticalFrames.topMargin], ["inner-margin-area", verticalFrames.topMargin],
+	["bottom-margin-area", verticalFrames.bottomMargin], ["outer-margin-area", verticalFrames.bottomMargin],
+]);
+// where an aligned shape sits in its frame, as a share of the room left; inside and outside are taken as left and right
+const vmlAlignShare = new Map([["left", 0], ["top", 0], ["inside", 0], ["center", 0.5], ["right", 1], ["bottom", 1], ["outside", 1]]);
+
+/** The CSS start of a VML shape along one axis, or null when it keeps its place in the line (no frame). */
+function vmlEdge(frames: Map<string, [string, string]>, relative: string, align: string, offset: number, size: number): string {
+	const frame = frames.get(relative);
+
+	if (!frame)
+		return null;
+
+	const [start, length] = frame;
+	const share = vmlAlignShare.get(align);
+
+	return share == null || size == null
+		? `calc(${start} + ${formatNumber(offset)}pt)`
+		: `calc(${start} + (${length} - ${formatNumber(size)}pt) * ${share})`;
+}
 
 const hasOwn = (record: object, key: string) => key != null && Object.prototype.hasOwnProperty.call(record, key);
 const pt = (value: number) => `${formatNumber(value)}pt`;
