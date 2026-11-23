@@ -1337,7 +1337,9 @@ section.${c}>footer { z-index: 1; }
 
 		if (elem.wrapType == "topAndBottom") {
 			set("display", "block");
-			set("margin-left", box.hRelative == "page" ? `calc(${pt(box.x)} - var(--docx-margin-left, 0pt))` : pt(box.x));
+			const left = vmlEdge(vmlHorizontalFrames, box.hRelative ?? "text", box.hAlign, box.x, box.width);
+			set("margin-left", left == null ? pt(box.x) : `calc(${left} - var(--docx-margin-left, 0pt))`);
+			// shortcut: the offset is taken from the line, not the vertical frame; upgrade when a document needs page-placed top-and-bottom shapes
 			set("margin-top", pt(box.y));
 		} else if (box.position == "absolute") {
 			set("position", "absolute");
