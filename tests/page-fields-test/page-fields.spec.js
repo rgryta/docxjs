@@ -154,6 +154,19 @@ describe("Page fields and section breaks", function () {
     expect(div.querySelectorAll("footer p:nth-child(n+2) [data-docx-field]").length).toBe(0);
   });
 
+  it("keeps a section's leading table on that section's page", async () => {
+    const table = '<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>';
+    div = await render({
+      body: para("A") + sectionEnd(PAGE) + table + '<w:p><w:pPr><w:pageBreakBefore/></w:pPr><w:r><w:t>B</w:t></w:r></w:p>',
+      sectPr: '<w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/>',
+      parts: [],
+    });
+
+    const tablePage = div.querySelector("article table").closest("section");
+    expect(tablePage).not.toBe(Array.from(div.querySelectorAll("article p")).find(p => p.textContent == "A").closest("section"));
+    expect(tablePage.style.width).toBe("792pt");
+  });
+
   it("numbers pages from pgNumType starts", async () => {
     const section = (pgNumType) => FOOTER + pgNumType + PAGE;
     div = await render({
