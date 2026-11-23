@@ -14,3 +14,6 @@ export interface WmlFieldSimple extends OpenXmlElement {
     lock: boolean;
     dirty: boolean;
 }
+export interface WmlFieldResult extends OpenXmlElement {
+    field: "PAGE" | "NUMPAGES";
+}
