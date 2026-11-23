@@ -1478,6 +1478,8 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
 			set("margin-left", hStatic);
 
 		if (!placed) {
+			// keeps margin-left in a right-to-left paragraph
+			if (!float) set("margin-right", "auto");
 			if (anchor.v.offset != null) set("margin-top", pt(anchor.v.offset));
 			return;
 		}
