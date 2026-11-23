@@ -1312,7 +1312,9 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
 	}
 
 	renderShape(box: HTMLElement, shape: ShapeContent, fitted: boolean, textColor: string = null): SVGSVGElement {
-		box.style.setProperty("pointer-events", "none");
+		// a drawn shape lets clicks through to the text under it; a picture keeps them, so a linked picture still opens
+		if (!shape.imageHref)
+			box.style.setProperty("pointer-events", "none");
 
 		const svg = this.createSvgElement("svg");
 
