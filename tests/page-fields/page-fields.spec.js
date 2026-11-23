@@ -173,14 +173,14 @@ describe("Page fields and section breaks", function () {
     div = await render({
       body: para("A") + pageBreak + para("B") + pageBreak + para("C"),
       sectPr: FOOTER + PAGE,
-      parts: [part("rIdF", [`<w:p>${field("PAGE", "7")}${run(" of ")}${field("NUMPAGES", "9")}</w:p>`])],
+      parts: [part("rIdF", [`<w:p>${field("PAGE", "7")}${run(" of ")}${field("NUMPAGES", "12")}</w:p>`])],
     });
     let now = 0;
     spyOn(performance, "now").and.callFake(() => ++now);
 
     // The first split pass finishes inside the budget; the pass after the fill stops.
     expect(docx.paginate(div, "docx", { budgetMs: 4 })).toBe(false);
-    expect(shownText(div, "FOOTER")).toEqual(["1 of 9", "2 of 9", "3 of 9"]);
+    expect(shownText(div, "FOOTER")).toEqual(["1 of 12", "2 of 12", "3 of 12"]);
   });
 
   it("picks even and odd footers by page number", async () => {
