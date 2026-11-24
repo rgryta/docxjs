@@ -3,7 +3,7 @@ import { convertLength, LengthUsage } from '../document/common';
 import { OpenXmlElementBase, DomType, OpenXmlElement } from '../document/dom';
 import xml from '../parser/xml-parser';
 import { clamp, strictInteger } from '../utils';
-import { arrowBase, arrowHead, DrawingGroup, GroupFrame, groupFrame, GroupPlace, integerPair, placeChild } from '../drawing/group';
+import { addArrowHead, DrawingGroup, GroupFrame, groupFrame, GroupPlace, integerPair, placeChild } from '../drawing/group';
 
 const vmlNamespace = "urn:schemas-microsoft-com:vml";
 
@@ -271,19 +271,22 @@ function lineHeads(stroke: Element, line: Record<string, string>, box: VmlBox, p
 	const corner = (x: string, y: string) => [x == "0" ? 0 : box.width, y == "0" ? 0 : box.height];
 	const ends = [corner(line.x1, line.y1), corner(line.x2, line.y2)];
 
-	return arrowTypes(stroke).flatMap((type, i): VmlSvgPart[] => {
-		if (type == "none" || !paint.stroke)
-			return [];
+	const parts: VmlSvgPart[] = [];
 
-		if (!drawnArrows.has(type))
-			return [markPart("partial")];
+	arrowTypes(stroke).forEach((type, i) => {
+		if (type == "none" || !paint.stroke)
+			return;
+
+		if (!drawnArrows.has(type)) {
+			parts.push(markPart("partial"));
+			return;
+		}
 
 		const scale = (name: string) => arrowScale[(xml.attr(stroke, `${["start", "end"][i]}arrow${name}`) ?? "").trim().toLowerCase()] ?? 3;
-		const d = arrowHead(ends[i], ends[1 - i], paint.strokeWidth, scale("width"), scale("length"));
-		const [bx, by] = arrowBase(ends[i], ends[1 - i], paint.strokeWidth, scale("length"));
-		Object.assign(line, i ? { x2: formatNumber(bx), y2: formatNumber(by) } : { x1: formatNumber(bx), y1: formatNumber(by) });
-		return [{ tagName: "path", attrs: { d, fill: paint.stroke, stroke: "none" } }];
+		addArrowHead(parts, line, ends, i, paint.strokeWidth, scale("width"), scale("length"), { fill: paint.stroke, stroke: "none" });
 	});
+
+	return parts;
 }
 
 export function notDrawn(reason: string): VmlElement {

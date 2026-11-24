@@ -1,5 +1,6 @@
 import { strictInteger } from '../utils';
 import { DomType, OpenXmlElementBase } from '../document/dom';
+import type { VmlSvgPart } from '../vml/vml';
 
 const maxPercent = 1e6;
 const pxPerPt = 4 / 3;
@@ -73,23 +74,25 @@ export function integerPair(text: string, fallback: number[]): number[] {
 	});
 }
 
-/** Where an arrowhead's base sits on the line, in px: the line stops there so its end does not poke past the tip. */
-export function arrowBase(tip: number[], from: number[], strokeWidth: number, lengthScale: number): number[] {
-	const [tx, ty] = tip.map(v => v * pxPerPt);
-	const [fx, fy] = from.map(v => v * pxPerPt);
-	const distance = Math.hypot(tx - fx, ty - fy) || 1;
-	const length = lengthScale * strokeWidth * pxPerPt;
-	return [tx - (tx - fx) / distance * length, ty - (ty - fy) / distance * length];
-}
-
-export function arrowHead(tip: number[], from: number[], strokeWidth: number, widthScale: number, lengthScale: number): string {
+/** An arrowhead at tip pointing away from `from`, in px: its path and its base, where the line stops so its end does not poke past the tip. */
+function arrowHead(tip: number[], from: number[], strokeWidth: number, widthScale: number, lengthScale: number): { d: string, base: number[] } {
 	const [tx, ty] = tip.map(v => v * pxPerPt);
 	const [fx, fy] = from.map(v => v * pxPerPt);
 	const distance = Math.hypot(tx - fx, ty - fy) || 1;
 	const [ux, uy] = [(tx - fx) / distance, (ty - fy) / distance];
+	const length = lengthScale * strokeWidth * pxPerPt;
 	const half = widthScale * strokeWidth * pxPerPt / 2;
-	const [bx, by] = arrowBase(tip, from, strokeWidth, lengthScale);
-	const f = (v: number) => `${parseFloat(v.toFixed(2))}`;
+	const [bx, by] = [tx - ux * length, ty - uy * length];
 
-	return `M ${f(tx)} ${f(ty)} L ${f(bx - uy * half)} ${f(by + ux * half)} L ${f(bx + uy * half)} ${f(by - ux * half)} Z`;
+	return { d: `M ${f(tx)} ${f(ty)} L ${f(bx - uy * half)} ${f(by + ux * half)} L ${f(bx + uy * half)} ${f(by - ux * half)} Z`, base: [bx, by] };
 }
+
+/** Draws an arrowhead at end i (0 start, 1 end) of a line between ends, in pt: stops the line at the head's base and adds the head. */
+export function addArrowHead(parts: VmlSvgPart[], line: Record<string, string>, ends: number[][], i: number,
+	strokeWidth: number, widthScale: number, lengthScale: number, attrs: Record<string, string>) {
+	const { d, base: [bx, by] } = arrowHead(ends[i], ends[1 - i], strokeWidth, widthScale, lengthScale);
+	Object.assign(line, i ? { x2: f(bx), y2: f(by) } : { x1: f(bx), y1: f(by) });
+	parts.push({ tagName: "path", attrs: { d, ...attrs } });
+}
+
+const f = (v: number) => `${parseFloat(v.toFixed(2))}`;
