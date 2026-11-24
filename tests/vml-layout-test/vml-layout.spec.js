@@ -44,6 +44,7 @@ describe("VML shapes", function () {
       pict('<v:polyline points="0,0 10,10"/>'),
       pict('<v:shape style="width:10pt;height:10pt"/>'),
       pict('<v:shape type="#missing" style="width:10pt;height:10pt"/>')),
+    para("case-freeform", pict(`<v:shape coordsize="3000,3000" style="width:10pt;height:10pt" path="m0,0l${Array.from({ length: 3000 }, (_, i) => `${i},${i % 7}`).join(",")}e"/>`)),
     para("case-picture-no-type", pict('<v:shape type="#missing" style="width:10pt;height:10pt"><v:imagedata r:id="rIdMissing"/></v:shape>')),
     para("case-watermark-alternate",
       `<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing/></mc:Choice><mc:Fallback>${`<w:pict>${textPath}</w:pict>`}</mc:Fallback></mc:AlternateContent></w:r>`),
@@ -238,6 +239,11 @@ ${body}
     const reasons = Array.from(paragraph("case-marks").querySelectorAll("[data-docx-not-drawn]"), el => el.getAttribute("data-docx-not-drawn"));
     expect(reasons).toEqual(["vml-path", "vml-element", "vml-shape", "vml-type"]);
     expect(paragraph("case-marks").querySelector("svg")).toBeNull();
+  });
+
+  it("draws a freeform with thousands of points", () => {
+    expect(paragraph("case-freeform").querySelector("[data-docx-not-drawn]")).toBeNull();
+    expect(paragraph("case-freeform").querySelector("svg path")).not.toBeNull();
   });
 
   it("marks a watermark as such only in a bare run", () => {

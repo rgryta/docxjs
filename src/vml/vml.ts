@@ -475,13 +475,10 @@ const pathGroupSize: Record<string, number> = { m: 2, l: 2, r: 2, t: 2, c: 6, v:
 const svgCommands: Record<string, [string, string]> = {
 	m: ["M", "L"], t: ["m", "l"], l: ["L", "L"], r: ["l", "l"], c: ["C", "C"], v: ["c", "c"]
 };
-const maxPathTokens = 10000;
-const maxPathValue = 2 ** 31;
 
 export function parseVmlPath(text: string): VmlSubpath[] {
 	const segments: { command: string, values: number[] }[] = [];
 	const token = /(-?\d+)|(,)|(\s+)/y;
-	let tokens = 0;
 	let afterComma = false;
 	let started = false;
 
@@ -494,9 +491,6 @@ export function parseVmlPath(text: string): VmlSubpath[] {
 	};
 
 	for (let i = 0; i < text.length;) {
-		if (++tokens > maxPathTokens)
-			return null;
-
 		const command = pathCommands.find(c => text.startsWith(c, i));
 
 		if (command) {
@@ -516,10 +510,7 @@ export function parseVmlPath(text: string): VmlSubpath[] {
 		const values = segments[segments.length - 1]?.values;
 
 		if (match[1]) {
-			const value = parseInt(match[1]);
-			if (Math.abs(value) > maxPathValue)
-				return null;
-			values.push(value);
+			values.push(parseInt(match[1]));
 			afterComma = false;
 			started = true;
 		} else if (match[2]) {
@@ -527,8 +518,6 @@ export function parseVmlPath(text: string): VmlSubpath[] {
 				values.push(0);
 			afterComma = true;
 			started = true;
-		} else {
-			tokens--;
 		}
 	}
 
