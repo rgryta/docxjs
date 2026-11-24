@@ -1465,8 +1465,10 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
 		if (!floating)
 			return;
 
-		const left = anchorEdge(anchor.h, horizontalFrames, width);
-		const hStatic = staticOffset(anchor.h, horizontalFrames);
+		// a table cell is not positioned, so a column-relative shape in one is offset from its place in the cell
+		const h = this.currentCellPosition && anchor.h.relative == "column" ? { ...anchor.h, relative: undefined } : anchor.h;
+		const left = anchorEdge(h, horizontalFrames, width);
+		const hStatic = staticOffset(h, horizontalFrames);
 
 		if (float) {
 			set("float", float.side);

@@ -44,6 +44,10 @@ describe("DrawingML shapes", function () {
   const ovalFallback = '<w:pict><v:oval style="width:20pt;height:10pt"/></w:pict>';
   const rectChoice = (requires, extra = "") => `<mc:Choice Requires="${requires}"${extra}>${inline(20, 10, shapeGraphic(wsp()))}</mc:Choice>`;
   const vmlTextBox = text => `<v:shape type="#_x0000_t202" style="width:100pt;height:20pt"><v:textbox><w:txbxContent>${textParas(text)}</w:txbxContent></v:textbox></v:shape>`;
+  // a two-column table with the content in the right cell
+  const cellTable = content => '<w:tbl><w:tblGrid><w:gridCol w:w="2280"/><w:gridCol w:w="2280"/></w:tblGrid><w:tr>' +
+    `<w:tc><w:tcPr><w:tcW w:w="2280" w:type="dxa"/></w:tcPr>${textParas("left cell")}</w:tc>` +
+    `<w:tc><w:tcPr><w:tcW w:w="2280" w:type="dxa"/></w:tcPr><w:p>${content}</w:p></w:tc></w:tr></w:tbl>`;
   const nestedBoxes = depth => depth == 0 ? textParas("innermost")
     : `<w:p><w:r>${inline(200, 20, shapeGraphic(wsp({ w: 200, h: 20, text: nestedBoxes(depth - 1) })))}</w:r></w:p>`;
 
@@ -104,6 +108,7 @@ describe("DrawingML shapes", function () {
     para("case-depth-16", run(inline(200, 20, shapeGraphic(wsp({ w: 200, h: 20, text: nestedBoxes(15) }))))),
     para("case-depth-17", run(inline(200, 20, shapeGraphic(wsp({ w: 200, h: 20, text: nestedBoxes(16) }))))),
     para("case-unsafe", run(anchor({ h: posH("page", "<wp:posOffset>5px</wp:posOffset>"), v: posV("paragraph", offset(0)) }, shapeGraphic(wsp())))),
+    cellTable(run(anchor({ h: posH("column", offset(0)), v: posV("paragraph", offset(0)) }, shapeGraphic(wsp())))),
     ...Array.from({ length: 30 }, (_, i) => para(`filler-${i}`)),
   ].join("\n");
 
@@ -330,6 +335,11 @@ ${content}
   it("keeps the shape type of a Fallback whose Choice is drawn for a later Fallback", () => {
     expect(reasons(paragraph("case-shapetype-second"))).toEqual([]);
     expect(textOf("case-shapetype-second", "Second box")).toBeTruthy();
+  });
+
+  it("places a no-wrap column-relative shape in a table cell from the cell", () => {
+    const cell = container.querySelectorAll("article td")[1];
+    expectNear(rect(cell.querySelector("svg").parentElement).left, rect(cell.querySelector("p")).left);
   });
 
   it("draws text boxes nested 16 deep and marks the 17th", () => {
