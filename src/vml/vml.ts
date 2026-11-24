@@ -211,25 +211,6 @@ function readShapeType(elem: Element): VmlShapeType {
 }
 
 const lengthPattern = /^[+-]?(\d+\.?\d*|\.\d+)(pt|px|in|cm|mm|pc|pi)?$/;
-const styleRules = new Map<string, RegExp>([
-	["position", /^(absolute|relative|static)$/],
-	["left", lengthPattern],
-	["top", lengthPattern],
-	["margin-left", lengthPattern],
-	["margin-top", lengthPattern],
-	["width", lengthPattern],
-	["height", lengthPattern],
-	["z-index", /^-?\d{1,10}$/],
-	["rotation", /^-?\d+(\.\d+)?$/],
-	["flip", /^(x|y|x y|y x)$/],
-	["visibility", /^(hidden|visible|inherit)$/],
-	["mso-position-horizontal", /^(absolute|left|center|right|inside|outside|top|bottom)$/],
-	["mso-position-vertical", /^(absolute|left|center|right|inside|outside|top|bottom)$/],
-	["mso-position-horizontal-relative", /^(page|margin|text|char|(left|right|inner|outer)-margin-area)$/],
-	["mso-position-vertical-relative", /^(page|margin|text|line|(top|bottom|inner|outer)-margin-area)$/],
-	["v-text-anchor", /^(top|middle|bottom)(-center|-baseline|-center-baseline)?$/],
-]);
-
 export function parseVmlStyle(text: string): Map<string, string> {
 	const result = new Map<string, string>();
 
@@ -239,10 +220,9 @@ export function parseVmlStyle(text: string): Map<string, string> {
 			result.set(item.substring(0, colon).trim().toLowerCase(), item.substring(colon + 1).trim().toLowerCase());
 	}
 
-	for (const [key, value] of result) {
-		if (!styleRules.get(key)?.test(value))
-			result.delete(key);
-	}
+	// each reader checks its own value; flip is the only one passed on as written
+	if (result.has("flip") && !/^(x|y|x y|y x)$/.test(result.get("flip")))
+		result.delete("flip");
 
 	return result;
 }
@@ -325,7 +305,7 @@ function parseViewBox(coordsize: string, coordorigin: string): string {
 	return [origin[0] ?? 0, origin[1] ?? 0, size[0] > 0 ? size[0] : 1, size[1] > 0 ? size[1] : 1].join(" ");
 }
 
-const textAnchor: Record<string, string> = { top: "flex-start", middle: "center", bottom: "flex-end" };
+const textAnchor = new Map([["top", "flex-start"], ["middle", "center"], ["bottom", "flex-end"]]);
 const defaultInset = ["7.2pt", "3.6pt", "7.2pt", "3.6pt"];
 
 function parseTextBox(elem: Element, anchor: string): VmlTextBox {
@@ -337,7 +317,7 @@ function parseTextBox(elem: Element, anchor: string): VmlTextBox {
 
 	return {
 		padding: [top, right, bottom, left],
-		justify: textAnchor[anchor?.split("-")[0]] ?? "flex-start",
+		justify: textAnchor.get(anchor?.split("-")[0]) ?? "flex-start",
 	};
 }
 

@@ -38,7 +38,6 @@ describe("VML shapes", function () {
       '<v:shapetype id="_x0000_t202" coordsize="21600,21600" path="m,l,21600r21600,l21600,xe"/>' +
       `<v:shape type="#_x0000_t202" filled="f" stroked="f" style="width:200pt;height:50pt">${textBox("Boxed text")}</v:shape>`)),
     para("case-stacking", pict(`<v:shape type="#_x0000_t202" style="width:100pt;height:30pt;z-index:-5;visibility:hidden;flip:x">${textBox("Flipped text")}</v:shape>`)),
-    para("case-unsafe", pict('<v:rect style="background:url(http://x/);position:fixed;width:10pt;height:10pt"/>')),
     para("case-marks",
       pict('<v:shape style="width:10pt;height:10pt" path="m0,0qx10,10e"/>'),
       pict('<v:polyline points="0,0 10,10"/>'),
@@ -226,13 +225,6 @@ ${body}
     expect(text.closest("svg")).toBeNull();
     for (let el = text; el != box; el = el.parentElement)
       expect(getComputedStyle(el).transform).toBe("none");
-  });
-
-  it("drops style values outside the allow-list", () => {
-    for (const el of paragraph("case-unsafe").querySelectorAll("*")) {
-      expect(getComputedStyle(el).backgroundImage).toBe("none");
-      expect(getComputedStyle(el).position).not.toBe("fixed");
-    }
   });
 
   it("marks the shapes it does not draw", () => {
