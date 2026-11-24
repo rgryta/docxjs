@@ -1480,19 +1480,18 @@ export class DocumentParser {
 		if (after) style["margin-bottom"] = after;
 
 		if (line) {
-			if (lineRule == "auto") {
-				// a unit (or a zero) is not a valid multiple of 240ths and would collapse the lines
-				const multiple = Number(line) / 240;
+			switch (lineRule) {
+				case "auto":
+					style["line-height"] = `${(Number(line) / 240).toFixed(2)}`;
+					break;
 
-				if (multiple >= 0.005)
-					style["line-height"] = multiple.toFixed(2);
-			} else {
-				const length = convertLength(line, LengthUsage.Dxa);
+				case "atLeast":
+					style["line-height"] = `calc(100% + ${convertLength(line, LengthUsage.Dxa)})`;
+					break;
 
-				if (lineRule == "atLeast")
-					style["line-height"] = `calc(100% + ${length})`;
-				else
-					style["line-height"] = style["min-height"] = length;
+				default:
+					style["line-height"] = style["min-height"] = convertLength(line, LengthUsage.Dxa);
+					break;
 			}
 		}
 	}
