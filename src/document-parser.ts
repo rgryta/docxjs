@@ -13,7 +13,8 @@ import { parseBookmarkEnd, parseBookmarkStart } from './document/bookmarks';
 import { IDomStyle, IDomSubStyle } from './document/style';
 import { WmlFieldChar, WmlFieldSimple, WmlInstructionText } from './document/fields';
 import { convertLength, LengthUsage, LengthUsageType } from './document/common';
-import { parseVmlElement } from './vml/vml';
+import { notDrawn, parseVmlElement, VmlShapeType } from './vml/vml';
+import { canDrawChoice, isDrawableShape, parseDrawingGroup, parseShape, parseShapeDrawing } from './drawing/shape';
 import { WmlComment, WmlCommentRangeEnd, WmlCommentRangeStart, WmlCommentReference } from './comments/elements';
 import { encloseFontFamily } from './utils';
 
@@ -23,8 +24,6 @@ export var autos = {
 	borderColor: "black",
 	highlight: "transparent"
 };
-
-const supportedNamespaceURIs = [];
 
 const mmlTagMap = {
 	"oMath": DomType.MmlMath,
@@ -61,6 +60,8 @@ export interface DocumentParserOptions {
 
 export class DocumentParser {
 	options: DocumentParserOptions;
+	vmlShapeTypes = new Map<string, VmlShapeType>();
+	drawingDepth = 0;
 
 	constructor(options?: Partial<DocumentParserOptions>) {
 		this.options = {
@@ -72,6 +73,7 @@ export class DocumentParser {
 
 	parseNotes(xmlDoc: Element, elemName: string, elemClass: any): any[] {
 		var result = [];
+		this.vmlShapeTypes.clear();
 
 		for (let el of xml.elements(xmlDoc, elemName)) {
 			const node = new elemClass();
@@ -86,6 +88,7 @@ export class DocumentParser {
 
 	parseComments(xmlDoc: Element): any[] {
 		var result = [];
+		this.vmlShapeTypes.clear();
 
 		for (let el of xml.elements(xmlDoc, "comment")) {
 			const item = new WmlComment();
@@ -104,6 +107,7 @@ export class DocumentParser {
 		var xbody = xml.element(xmlDoc, "body");
 		var background = xml.element(xmlDoc, "background");
 		var sectPr = xml.element(xbody, "sectPr");
+		this.vmlShapeTypes.clear();
 
 		return {
 			type: DomType.Document,
@@ -122,6 +126,20 @@ export class DocumentParser {
 		}
 
 		return result;
+	}
+
+	parseTextBoxContent(element: Element): OpenXmlElement[] {
+		return this.nested(() => this.parseBodyElements(element));
+	}
+
+	nested<T>(parse: () => T): T {
+		this.drawingDepth++;
+
+		try {
+			return parse();
+		} finally {
+			this.drawingDepth--;
+		}
 	}
 
 	parseBodyElements(element: Element): OpenXmlElement[] {
@@ -631,8 +649,8 @@ export class DocumentParser {
 	parseRun(node: Element, parent?: OpenXmlElement): WmlRun {
 		var result: WmlRun = <WmlRun>{ type: DomType.Run, parent: parent, children: [] };
 
-		for (let c of xml.elements(node)) {
-			c = this.checkAlternateContent(c);
+		for (const child of xml.elements(node)) {
+			const c = this.checkAlternateContent(child);
 
 			switch (c?.localName) {
 				case "t":
@@ -739,6 +757,9 @@ export class DocumentParser {
 					this.parseRunProperties(c, result);
 					break;
 			}
+
+			if (c !== child && (!c || c.nextElementSibling))
+				result.children.push(notDrawn("alternate"));
 		}
 
 		return result;
@@ -816,17 +837,18 @@ export class DocumentParser {
 		if (elem.localName != 'AlternateContent')
 			return elem;
 
-		var choice = xml.element(elem, "Choice");
+		const choice = xml.element(elem, "Choice");
+		const fallback = xml.element(elem, "Fallback");
 
-		if (choice) {
-			var requires = xml.attr(choice, "Requires");
-			var namespaceURI = elem.lookupNamespaceURI(requires);
+		if (choice && canDrawChoice(choice)) {
+			// Word writes a shape type only in the first Fallback that uses it, so later Fallbacks still need it
+			for (const shapeType of fallback ? Array.from(fallback.getElementsByTagNameNS("*", "shapetype")) : [])
+				parseVmlElement(shapeType, this);
 
-			if (supportedNamespaceURIs.includes(namespaceURI))
-				return choice.firstElementChild;
+			return choice.firstElementChild;
 		}
 
-		return xml.element(elem, "Fallback")?.firstElementChild;
+		return fallback?.firstElementChild;
 	}
 
 	parseDrawing(node: Element): OpenXmlElement {
@@ -842,6 +864,11 @@ export class DocumentParser {
 	parseDrawingWrapper(node: Element): OpenXmlElement {
 		var result = <OpenXmlElement>{ type: DomType.Drawing, children: [], cssStyle: {} };
 		var isAnchor = node.localName == "anchor";
+		const docPr = xml.element(node, "docPr");
+
+		// a drawing the author hid in Word's selection pane is not shown, whatever its wrapping
+		if (docPr && xml.boolAttr(docPr, "hidden", false))
+			return null;
 
 		//TODO
 		// result.style["margin-left"] = xml.sizeAttr(node, "distL", SizeType.Emu);
@@ -851,39 +878,21 @@ export class DocumentParser {
 
 		let wrapType: "wrapTopAndBottom" | "wrapNone" | null = null;
 		let simplePos = xml.boolAttr(node, "simplePos");
-		let behindDoc = xml.boolAttr(node, "behindDoc");
-
-		let posX = { relative: "page", align: "left", offset: "0" };
-		let posY = { relative: "page", align: "top", offset: "0" };
+		let align = "left";
 
 		for (var n of xml.elements(node)) {
 			switch (n.localName) {
-				case "simplePos":
-					if (simplePos) {
-						posX.offset = xml.lengthAttr(n, "x", LengthUsage.Emu);
-						posY.offset = xml.lengthAttr(n, "y", LengthUsage.Emu);
-					}
-					break;
-
 				case "extent":
 					result.cssStyle["width"] = xml.lengthAttr(n, "cx", LengthUsage.Emu);
 					result.cssStyle["height"] = xml.lengthAttr(n, "cy", LengthUsage.Emu);
 					break;
 
 				case "positionH":
-				case "positionV":
 					if (!simplePos) {
-						let pos = n.localName == "positionH" ? posX : posY;
 						var alignNode = xml.element(n, "align");
-						var offsetNode = xml.element(n, "posOffset");
-
-						pos.relative = xml.attr(n, "relativeFrom") ?? pos.relative;
 
 						if (alignNode)
-							pos.align = alignNode.textContent;
-
-						if (offsetNode)
-							pos.offset = convertLength(offsetNode.textContent, LengthUsage.Emu);
+							align = alignNode.textContent;
 					}
 					break;
 
@@ -904,27 +913,19 @@ export class DocumentParser {
 			}
 		}
 
+		if (g?.type == DomType.Shape || g?.type == DomType.Group || (isAnchor && wrapType == "wrapNone" && g?.type == DomType.Image))
+			return parseShapeDrawing(node, g, this.drawingDepth > 0);
+
 		if (wrapType == "wrapTopAndBottom") {
 			result.cssStyle['display'] = 'block';
 
-			if (posX.align) {
-				result.cssStyle['text-align'] = posX.align;
+			if (align) {
+				result.cssStyle['text-align'] = align;
 				result.cssStyle['width'] = "100%";
 			}
 		}
-		else if (wrapType == "wrapNone") {
-			result.cssStyle['display'] = 'block';
-			result.cssStyle['position'] = 'relative';
-			result.cssStyle["width"] = "0px";
-			result.cssStyle["height"] = "0px";
-
-			if (posX.offset)
-				result.cssStyle["left"] = posX.offset;
-			if (posY.offset)
-				result.cssStyle["top"] = posY.offset;
-		}
-		else if (isAnchor && (posX.align == 'left' || posX.align == 'right')) {
-			result.cssStyle["float"] = posX.align;
+		else if (isAnchor && (align == 'left' || align == 'right')) {
+			result.cssStyle["float"] = align;
 		}
 
 		return result;
@@ -933,14 +934,20 @@ export class DocumentParser {
 	parseGraphic(elem: Element): OpenXmlElement {
 		var graphicData = xml.element(elem, "graphicData");
 
-		for (let n of xml.elements(graphicData)) {
+		for (let n of graphicData ? xml.elements(graphicData) : []) {
 			switch (n.localName) {
 				case "pic":
 					return this.parsePicture(n);
+
+				case "wsp":
+					return isDrawableShape(n) ? parseShape(n, this) : notDrawn("graphic");
+
+				case "wgp":
+					return parseDrawingGroup(n, xml.element(elem.parentNode as Element, "extent"), this);
 			}
 		}
 
-		return null;
+		return notDrawn("graphic");
 	}
 
 	parsePicture(elem: Element): IDomImage {
@@ -1473,24 +1480,24 @@ export class DocumentParser {
 	parseSpacing(node: Element, style: Record<string, string>) {
 		var before = xml.lengthAttr(node, "before");
 		var after = xml.lengthAttr(node, "after");
-		var line = xml.intAttr(node, "line", null);
-		var lineRule = xml.attr(node, "lineRule");
+		var line = xml.attr(node, "line");
+		var lineRule = xml.attr(node, "lineRule") ?? "auto";
 
 		if (before) style["margin-top"] = before;
 		if (after) style["margin-bottom"] = after;
 
-		if (line !== null) {
+		if (line) {
 			switch (lineRule) {
 				case "auto":
-					style["line-height"] = `${(line / 240).toFixed(2)}`;
+					style["line-height"] = `${(Number(line) / 240).toFixed(2)}`;
 					break;
 
 				case "atLeast":
-					style["line-height"] = `calc(100% + ${line / 20}pt)`;
+					style["line-height"] = `calc(100% + ${convertLength(line, LengthUsage.Dxa)})`;
 					break;
 
 				default:
-					style["line-height"] = style["min-height"] = `${line / 20}pt`
+					style["line-height"] = style["min-height"] = convertLength(line, LengthUsage.Dxa);
 					break;
 			}
 		}
