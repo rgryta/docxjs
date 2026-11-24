@@ -47,7 +47,7 @@ function splitPages(pages: HTMLElement[], className: string, deadline: number): 
 		// Pages before i are final, so i is this page's final position.
 		[number] = pageNumber(pages[i], number);
 		showHeaderFooter(pages[i], number);
-		const next = splitPage(pages[i], className);
+		const next = splitPage(pages[i], className, number + 1);
 
 		if (next)
 			pages.splice(i + 1, 0, next);
@@ -170,7 +170,7 @@ function setFieldText(field: HTMLElement, text: string): boolean {
  * blocks of every article in order, then the notes lists. Returns the new page, or null when
  * the content fits or cannot be split.
  */
-export function splitPage(page: HTMLElement, className: string = "docx"): HTMLElement | null {
+export function splitPage(page: HTMLElement, className: string, nextNumber: number): HTMLElement | null {
 	const children = Array.from(page.children) as HTMLElement[];
 	const articles = children.filter(c => c.tagName === "ARTICLE");
 
@@ -187,7 +187,9 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	const below = footer ? outerHeight(footer) : 0;
 	const limitY = page.getBoundingClientRect().top + pageHeight - (parseFloat(style.paddingBottom) || 0) - below + 0.5;
 
-	if (limitY - articles[0].getBoundingClientRect().top < MIN_SPLIT_HEIGHT)
+	const pageSpace = limitY - articles[0].getBoundingClientRect().top;
+
+	if (pageSpace < MIN_SPLIT_HEIGHT)
 		return null;
 
 	// A footnote list stays on the page with its references: the page keeps as many notes as it keeps
@@ -246,11 +248,7 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	}
 
 	if (over < 0 && keptNotes == items.length) {
-		for (const f of flow) {
-			if (f.article && isBlank(f.block) && f.block.getBoundingClientRect().bottom > limitY)
-				f.block.style.display = "none";
-		}
-
+		hideBlankOverflow(flow, limitY);
 		return null;
 	}
 
@@ -263,17 +261,22 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 	else if (over >= 0 && flow[over].block.tagName === "P")
 		carry = splitParagraph(flow[over].block, splitLimit, className);
 
-	if (carry) {
-		cut = over + 1;
+	const stays = over >= 0 && !carry && unbreakableHeight(flow[over].block) > Math.max(pageSpace, pageSpace + headerFooterSaving(children, nextNumber));
+
+	if (carry || stays) {
+		cut = over + 1;  // a block that cannot split and is taller than a page would overflow the next page too
 	} else if (over >= 0) {
 		while (cut > 0 && flow[cut - 1].article === overArticle && overArticle && getComputedStyle(flow[cut - 1].block).breakAfter === "avoid")
 			cut--;
 
 		if (cut === 0)
 			cut = over || 1;
+	}
 
-		if (cut >= flow.length && keptNotes == items.length)
-			return null;  // a single block taller than a page stays where it is
+	// the notes of a page whose tall block stays where it starts stay with it
+	if (!carry && keptNotes == items.length && flow.slice(cut).every(f => f.article ? isBlank(f.block) : stays)) {
+		hideBlankOverflow(flow, limitY);
+		return null;
 	}
 
 	const moved = new Map<HTMLElement, HTMLElement[]>();
@@ -348,6 +351,61 @@ function showHeaderFooter(page: HTMLElement, number: number) {
 				c.style.display = c === pick ? "" : "none";
 		}
 	}
+}
+
+/**
+ * How much more room a page split off this one has: page nextNumber shows the even or default header
+ * and footer instead of the first-page ones, so a tall letterhead on the first page leaves more space on the next.
+ */
+function headerFooterSaving(children: HTMLElement[], nextNumber: number): number {
+	let saving = 0;
+
+	for (const tag of ["HEADER", "FOOTER"]) {
+		const shown = children.find(c => c.tagName === tag && getComputedStyle(c).display !== "none");
+		const next = children.filter(c => c.tagName === tag && c.dataset.docxHf !== "first");
+		const find = (type: string) => next.find(c => c.dataset.docxHf === type);
+		// the alternate the next page shows, picked as showHeaderFooter does
+		const pick = (nextNumber % 2 == 0 ? find("even") : null) ?? find("default");
+		const height = pick ? shownHeight(pick) : 0;
+		saving += (shown ? outerHeight(shown) : 0) - height;
+	}
+
+	return saving;
+}
+
+/** Outer height of a header or footer as if shown; a hidden alternate is shown just long enough to measure it. */
+function shownHeight(el: HTMLElement): number {
+	if (el.style.display !== "none")
+		return outerHeight(el);
+
+	el.style.display = "";
+	const height = outerHeight(el);
+	el.style.display = "none";
+	return height;
+}
+
+function hideBlankOverflow(flow: { block: HTMLElement, article: HTMLElement }[], limitY: number) {
+	for (const f of flow) {
+		if (f.article && isBlank(f.block) && f.block.getBoundingClientRect().bottom > limitY)
+			f.block.style.display = "none";
+	}
+}
+
+/**
+ * Height of the leading part of a block that cannot be split off: a table's header and first body row,
+ * a whole paragraph kept together, or the whole of any other block. Any other paragraph counts as 0: one
+ * with text splits between its lines, and one of pictures only moves to a new page instead of staying.
+ */
+function unbreakableHeight(block: HTMLElement): number {
+	if (block instanceof HTMLTableElement) {
+		const first = Array.from(block.rows).find(r => r.parentElement !== block.tHead);
+		return first ? first.getBoundingClientRect().bottom - block.getBoundingClientRect().top : 0;
+	}
+
+	if (block.tagName === "P" && getComputedStyle(block).breakInside !== "avoid")
+		return 0;
+
+	return outerHeight(block);
 }
 
 function outerHeight(el: HTMLElement): number {
