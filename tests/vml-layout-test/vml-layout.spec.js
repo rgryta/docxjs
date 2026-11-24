@@ -264,6 +264,17 @@ ${body}
     expectNear(rect(cell.querySelector("svg").parentElement).left, rect(cell.querySelector("p")).left);
   });
 
+  it("leaves the page size variables off when the page size is ignored", async () => {
+    const other = document.createElement("div");
+    document.body.appendChild(other);
+    await docx.renderAsync(await buildDocx(), other, null, { ignoreWidth: true, ignoreHeight: true });
+    const style = other.querySelector("section.docx").style;
+    expect(style.getPropertyValue("--docx-page-width")).toBe("");
+    expect(style.getPropertyValue("--docx-page-height")).toBe("");
+    expect(style.getPropertyValue("--docx-margin-left")).not.toBe("");
+    other.remove();
+  });
+
   it("does not mark a picture shape whose shape type is missing", () => {
     const reasons = Array.from(paragraph("case-picture-no-type").querySelectorAll("[data-docx-not-drawn]")).map(e => e.getAttribute("data-docx-not-drawn"));
     expect(reasons).not.toContain("vml-type");

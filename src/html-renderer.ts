@@ -344,8 +344,8 @@ export class HtmlRenderer {
 			}
 
 			const pageVariables: Record<(typeof pageVariableNames)[number], string> = {
-				"--docx-page-width": props.pageSize?.width,
-				"--docx-page-height": props.pageSize?.height,
+				"--docx-page-width": this.options.ignoreWidth ? null : props.pageSize?.width,
+				"--docx-page-height": this.options.ignoreHeight ? null : props.pageSize?.height,
 				"--docx-margin-left": props.pageMargins?.left,
 				"--docx-margin-right": props.pageMargins?.right,
 				"--docx-margin-top": props.pageMargins?.top,
