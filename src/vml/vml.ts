@@ -1,8 +1,9 @@
 import { DocumentParser } from '../document-parser';
 import { convertLength, LengthUsage } from '../document/common';
-import { OpenXmlElementBase, DomType } from '../document/dom';
+import { OpenXmlElementBase, DomType, OpenXmlElement } from '../document/dom';
 import xml from '../parser/xml-parser';
 import { clamp } from '../utils';
+import { addArrowHead, DrawingGroup, GroupFrame, groupFrame, GroupPlace, integerPair, placeChild, strictInteger } from '../drawing/group';
 
 const vmlNamespace = "urn:schemas-microsoft-com:vml";
 
@@ -61,13 +62,15 @@ export class VmlElement extends OpenXmlElementBase {
 	flip?: string;
 	textBox?: VmlTextBox;
 	wrapType?: string;
+	place?: GroupPlace;
+	group?: DrawingGroup;
 	imageHref?: {
 		id: string,
 		title: string
 	}
 }
 
-export function parseVmlElement(elem: Element, parser: DocumentParser): VmlElement {
+export function parseVmlElement(elem: Element, parser: DocumentParser, frame: GroupFrame = null): OpenXmlElement {
 	if (elem.namespaceURI != vmlNamespace)
 		return null;
 
@@ -76,6 +79,9 @@ export function parseVmlElement(elem: Element, parser: DocumentParser): VmlEleme
 		id && parser.vmlShapeTypes.set(id, readShapeType(elem));
 		return null;
 	}
+
+	if (elem.localName == "group")
+		return parseVmlGroup(elem, parser, frame);
 
 	switch (elem.localName) {
 		case "rect":
@@ -126,6 +132,17 @@ export function parseVmlElement(elem: Element, parser: DocumentParser): VmlEleme
 	const style = parseVmlStyle(xml.attr(elem, "style"));
 	result.box = parseBox(style);
 
+	if (frame) {
+		const line = elem.localName == "line";
+		const mapped = placeChild(frame, line ? lineRect(elem) : groupRect(style), line, result.box.rotation ?? 0);
+
+		if (!mapped)
+			return notDrawn("group-child");
+
+		result.place = mapped.place;
+		result.box = { x: 0, y: 0, width: mapped.width, height: mapped.height, hidden: result.box.hidden };
+	}
+
 	const imageId = imageData && xml.attr(imageData, "id");
 	const paint = parsePaint(elem, shapeType, stroke, fill);
 
@@ -148,9 +165,11 @@ export function parseVmlElement(elem: Element, parser: DocumentParser): VmlEleme
 				result.parts.push({ tagName: "ellipse", attrs: { cx: "50%", cy: "50%", rx: "50%", ry: "50%", ...paintAttrs(paint, true, true) } });
 				break;
 
-			case "line":
-				result.parts.push(parseLine(elem, result.box, paint));
+			case "line": {
+				const line = parseLine(elem, frame ? { ...result.box } : result.box, paint);
+				result.parts.push(line, ...lineHeads(stroke, line.attrs, result.box, paint));
 				break;
+			}
 
 			case "shape": {
 				const pathText = xml.attr(elem, "path") || shapeType.path;
@@ -172,9 +191,14 @@ export function parseVmlElement(elem: Element, parser: DocumentParser): VmlEleme
 		}
 	}
 
-	const flip = style.get("flip");
-	if (flip)
-		result.flip = flip.length > 1 ? "scale(-1, -1)" : flip == "x" ? "scale(-1, 1)" : "scale(1, -1)";
+	if (elem.localName != "line" && arrowTypes(stroke).some(type => type != "none"))
+		result.parts.push(markPart("partial"));
+
+	const flip = style.get("flip") ?? "";
+	const flipX = flip.includes("x") != !!frame?.flipH;
+	const flipY = flip.includes("y") != !!frame?.flipV;
+	if (flipX || flipY)
+		result.flip = `scale(${flipX ? -1 : 1}, ${flipY ? -1 : 1})`;
 
 	if (textBox) {
 		result.textBox = parseTextBox(textBox, style.get("v-text-anchor"));
@@ -185,10 +209,94 @@ export function parseVmlElement(elem: Element, parser: DocumentParser): VmlEleme
 	return result;
 }
 
+function parseVmlGroup(elem: Element, parser: DocumentParser, frame: GroupFrame): OpenXmlElement {
+	const style = parseVmlStyle(xml.attr(elem, "style"));
+	const box = parseBox(style);
+
+	if (frame && box.hidden)
+		return null;
+
+	const mapped = frame && placeChild(frame, groupRect(style), false, box.rotation ?? 0);
+	const width = frame ? mapped?.width : box.width;
+	const height = frame ? mapped?.height : box.height;
+	const flip = style.get("flip") ?? "";
+	const childFrame = groupFrame(integerPair(xml.attr(elem, "coordorigin") ?? "", [0, 0]), integerPair(xml.attr(elem, "coordsize") ?? "", [1000, 1000]),
+		width, height, flip.includes("x") != !!frame?.flipH, flip.includes("y") != !!frame?.flipV);
+
+	if (!childFrame || frame && !mapped)
+		return notDrawn("group-child");
+
+	const children = parser.nested(() => xml.elements(elem).map(child => parseVmlElement(child, parser, childFrame)).filter(Boolean));
+
+	const group = new DrawingGroup();
+	group.width = width;
+	group.height = height;
+	group.children = children;
+
+	if (frame) {
+		group.place = mapped.place;
+		return group;
+	}
+
+	const result = new VmlElement();
+	const wrap = xml.elements(elem).find(child => child.localName == "wrap");
+	result.box = box;
+	result.group = group;
+	result.wrapType = wrap ? xml.attr(wrap, "type") : undefined;
+	return result;
+}
+
+function groupUnit(value: string, fallback: number = null): number {
+	return value == null ? fallback : strictInteger(value);
+}
+
+function groupRect(style: Map<string, string>): number[] {
+	return [groupUnit(style.get("left"), 0), groupUnit(style.get("top"), 0), groupUnit(style.get("width")), groupUnit(style.get("height"))];
+}
+
+function lineRect(elem: Element): number[] {
+	const [x1, y1] = integerPair(xml.attr(elem, "from") ?? "", [0, 0]);
+	const [x2, y2] = integerPair(xml.attr(elem, "to") ?? "", [0, 0]);
+	return [Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1)];
+}
+
+const drawnArrows = new Set(["block", "classic", "open"]);
+const arrowScale: Record<string, number> = { narrow: 2, short: 2, medium: 3, wide: 5, long: 5 };
+
+function arrowTypes(stroke: Element): string[] {
+	return ["startarrow", "endarrow"].map(name => (stroke && xml.attr(stroke, name))?.trim().toLowerCase() ?? "none");
+}
+
+function lineHeads(stroke: Element, line: Record<string, string>, box: VmlBox, paint: VmlPaint): VmlSvgPart[] {
+	const corner = (x: string, y: string) => [x == "0" ? 0 : box.width, y == "0" ? 0 : box.height];
+	const ends = [corner(line.x1, line.y1), corner(line.x2, line.y2)];
+
+	const parts: VmlSvgPart[] = [];
+
+	arrowTypes(stroke).forEach((type, i) => {
+		if (type == "none" || !paint.stroke)
+			return;
+
+		if (!drawnArrows.has(type)) {
+			parts.push(markPart("partial"));
+			return;
+		}
+
+		const scale = (name: string) => arrowScale[(xml.attr(stroke, `${["start", "end"][i]}arrow${name}`) ?? "").trim().toLowerCase()] ?? 3;
+		addArrowHead(parts, line, ends, i, paint.strokeWidth, scale("width"), scale("length"), { fill: paint.stroke, stroke: "none" });
+	});
+
+	return parts;
+}
+
 export function notDrawn(reason: string): VmlElement {
 	const result = new VmlElement();
 	result.notDrawn = reason;
 	return result;
+}
+
+function markPart(reason: string): VmlSvgPart {
+	return { tagName: "g", attrs: { "data-docx-not-drawn": reason } };
 }
 
 function readShapeType(elem: Element): VmlShapeType {
