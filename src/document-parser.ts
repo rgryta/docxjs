@@ -837,11 +837,17 @@ export class DocumentParser {
 			return elem;
 
 		const choice = xml.element(elem, "Choice");
+		const fallback = xml.element(elem, "Fallback");
 
-		if (choice && canDrawChoice(choice))
+		if (choice && canDrawChoice(choice)) {
+			// Word writes a shape type only in the first Fallback that uses it, so later Fallbacks still need it
+			for (const shapeType of fallback ? Array.from(fallback.getElementsByTagNameNS("*", "shapetype")) : [])
+				parseVmlElement(shapeType, this);
+
 			return choice.firstElementChild;
+		}
 
-		return xml.element(elem, "Fallback")?.firstElementChild;
+		return fallback?.firstElementChild;
 	}
 
 	parseDrawing(node: Element): OpenXmlElement {

@@ -43,6 +43,7 @@ describe("DrawingML shapes", function () {
   const alternate = (choice, fallback) => `<mc:AlternateContent>${choice}${fallback == null ? "" : `<mc:Fallback>${fallback}</mc:Fallback>`}</mc:AlternateContent>`;
   const ovalFallback = '<w:pict><v:oval style="width:20pt;height:10pt"/></w:pict>';
   const rectChoice = (requires, extra = "") => `<mc:Choice Requires="${requires}"${extra}>${inline(20, 10, shapeGraphic(wsp()))}</mc:Choice>`;
+  const vmlTextBox = text => `<v:shape type="#_x0000_t202" style="width:100pt;height:20pt"><v:textbox><w:txbxContent>${textParas(text)}</w:txbxContent></v:textbox></v:shape>`;
   const nestedBoxes = depth => depth == 0 ? textParas("innermost")
     : `<w:p><w:r>${inline(200, 20, shapeGraphic(wsp({ w: 200, h: 20, text: nestedBoxes(depth - 1) })))}</w:r></w:p>`;
 
@@ -96,6 +97,10 @@ describe("DrawingML shapes", function () {
       run(inline(20, 10, shapeGraphic(custGeom))),
       run(alternate(`<mc:Choice Requires="wps">${inline(20, 10, shapeGraphic(custGeom))}</mc:Choice>`)),
       run(alternate('<mc:Choice Requires="wps"/>', `${ovalFallback}${ovalFallback}`))),
+    para("case-shapetype-first", run(alternate(`<mc:Choice Requires="wps">${inline(100, 20, shapeGraphic(wsp({ w: 100, h: 20, text: textParas("First box") })))}</mc:Choice>`,
+      `<w:pict><v:shapetype id="_x0000_t202" coordsize="21600,21600" path="m,l,21600r21600,l21600,xe"/>${vmlTextBox("First box")}</w:pict>`))),
+    para("case-shapetype-second", run(alternate(`<mc:Choice Requires="wps">${inline(100, 20, shapeGraphic(wsp({ w: 100, h: 20, text: textParas("Second box"), bodyPr: '<wps:bodyPr vert="vert270"/>' })))}</mc:Choice>`,
+      `<w:pict>${vmlTextBox("Second box")}</w:pict>`))),
     para("case-depth-16", run(inline(200, 20, shapeGraphic(wsp({ w: 200, h: 20, text: nestedBoxes(15) }))))),
     para("case-depth-17", run(inline(200, 20, shapeGraphic(wsp({ w: 200, h: 20, text: nestedBoxes(16) }))))),
     para("case-unsafe", run(anchor({ h: posH("page", "<wp:posOffset>5px</wp:posOffset>"), v: posV("paragraph", offset(0)) }, shapeGraphic(wsp())))),
@@ -320,6 +325,11 @@ ${content}
   it("marks graphics and alternate content it does not draw", () => {
     expect(reasons(paragraph("case-marks"))).toEqual(["graphic", "alternate", "alternate"]);
     expect(paragraph("case-marks").querySelectorAll("svg ellipse").length).toBe(1);
+  });
+
+  it("keeps the shape type of a Fallback whose Choice is drawn for a later Fallback", () => {
+    expect(reasons(paragraph("case-shapetype-second"))).toEqual([]);
+    expect(textOf("case-shapetype-second", "Second box")).toBeTruthy();
   });
 
   it("draws text boxes nested 16 deep and marks the 17th", () => {
