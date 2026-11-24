@@ -3,7 +3,7 @@ import { DomType, OpenXmlElement, OpenXmlElementBase } from '../document/dom';
 import xml from '../parser/xml-parser';
 import { DmlTheme } from '../theme/theme';
 import { clamp } from '../utils';
-import { formatNumber, namedColors, VmlTextBox } from '../vml/vml';
+import { formatNumber, VmlTextBox } from '../vml/vml';
 
 const shapeNamespace = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
 const drawnPresets = new Set(["rect", "roundRect", "ellipse", "line"]);
@@ -23,8 +23,7 @@ export interface DmlStyleRef {
 }
 
 export interface ResolvedColor {
-	rgb?: Rgb;
-	name?: string;
+	rgb: Rgb;
 	alpha: number;
 }
 
@@ -167,7 +166,7 @@ function parseBodyProps(bodyPr: Element): VmlTextBox {
 }
 
 const colorAttrs: Record<string, string[]> = {
-	srgbClr: ["val"], schemeClr: ["val"], sysClr: ["lastClr"], prstClr: ["val"], scrgbClr: ["r", "g", "b"], hslClr: ["hue", "sat", "lum"],
+	srgbClr: ["val"], schemeClr: ["val"], sysClr: ["lastClr"],
 };
 
 function parseColor(parent: Element): DmlColor {
@@ -228,10 +227,8 @@ const hex6 = /^[0-9A-Fa-f]{6}$/;
 const schemeAliases = new Map([["bg1", "lt1"], ["tx1", "dk1"], ["bg2", "lt2"], ["tx2", "dk2"]]);
 const modifiers = new Set(["lumMod", "lumOff", "satMod", "shade", "tint", "alpha"]);
 
-export function resolveColor(spec: DmlColor, theme: DmlTheme, placeholder: ResolvedColor = null): ResolvedColor {
-	const color = spec.kind == "schemeClr" && spec.values[0] == "phClr"
-		? placeholder && { ...placeholder }
-		: baseColor(spec, theme);
+export function resolveColor(spec: DmlColor, theme: DmlTheme): ResolvedColor {
+	const color = baseColor(spec, theme);
 
 	if (!color)
 		return null;
@@ -240,7 +237,7 @@ export function resolveColor(spec: DmlColor, theme: DmlTheme, placeholder: Resol
 		if (!modifiers.has(name))
 			continue;
 
-		if (!/^-?\d+$/.test(value ?? "") || name != "alpha" && !color.rgb)
+		if (!/^-?\d+$/.test(value ?? ""))
 			return null;
 
 		const amount = parseInt(value) / 100000;
@@ -256,7 +253,6 @@ export function resolveColor(spec: DmlColor, theme: DmlTheme, placeholder: Resol
 
 function baseColor(spec: DmlColor, theme: DmlTheme): ResolvedColor {
 	const [first] = spec.values;
-	const numbers = spec.values.map(integer);
 
 	switch (spec.kind) {
 		case "srgbClr":
@@ -265,19 +261,6 @@ function baseColor(spec: DmlColor, theme: DmlTheme): ResolvedColor {
 
 		case "schemeClr":
 			return rgbColor(hexRgb(theme?.colorScheme?.colors[schemeAliases.get(first) ?? first]));
-
-		case "prstClr": {
-			const name = first?.toLowerCase().replace(/^dk/, "dark").replace(/^lt/, "light").replace(/^med/, "medium");
-			return namedColors.has(name) ? { name, alpha: 1 } : null;
-		}
-
-		case "scrgbClr":
-			return numbers.every(n => n != null) ? rgbColor(numbers.map(n => toGamma(clamp(n / 100000, 0, 1)))) : null;
-
-		case "hslClr":
-			return numbers.every(n => n != null)
-				? rgbColor(fromHsl([(numbers[0] / 21600000 % 1 + 1) % 1, clamp(numbers[1] / 100000, 0, 1), clamp(numbers[2] / 100000, 0, 1)]))
-				: null;
 	}
 
 	return null;
@@ -292,7 +275,7 @@ function hexRgb(value: unknown): Rgb {
 }
 
 export function formatColor(color: ResolvedColor): string {
-	return color.name ?? `#${color.rgb.map(c => Math.round(clamp(c, 0, 1) * 255).toString(16).padStart(2, "0")).join("")}`;
+	return `#${color.rgb.map(c => Math.round(clamp(c, 0, 1) * 255).toString(16).padStart(2, "0")).join("")}`;
 }
 
 function modify(rgb: Rgb, name: string, amount: number): Rgb {

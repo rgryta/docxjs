@@ -1389,7 +1389,7 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
 			if (spec === null || spec === undefined && !fromRef)
 				return null;
 
-			const color = fromRef ? refColor : resolveColor(spec, theme, refColor);
+			const color = fromRef ? refColor : resolveColor(spec, theme);
 			partial ||= !color;
 			return color;
 		};
