@@ -229,6 +229,22 @@
       }
     });
 
+    it("pushes the last body lines down instead of giving the endnotes a page of their own", async () => {
+      for (let count = 36; count <= 56; count++) {
+        div?.remove();
+        div = await render({
+          body: paras(count, 1) + `<w:p>${run("Ref")}<w:r><w:endnoteReference w:id="1"/></w:r></w:p>`,
+          parts: [{ id: "rIdE", type: "endnotes", target: "endnotes.xml", content: `<w:endnotes ${NS}><w:endnote w:id="1">${para("End")}${para("Second end line")}</w:endnote></w:endnotes>` }],
+        });
+
+        docx.paginate(div);
+
+        const notesPage = pages(div).find(p => p.querySelector(":scope > ol"));
+        expect(notesPage.querySelector(":scope > article > p")).withContext(`${count} paragraphs`).not.toBeNull();
+        pages(div).forEach(page => expect(fits(page)).withContext(`${count} paragraphs`).toBe(true));
+      }
+    });
+
     it("keeps footnotes with their references when endnotes share the last page", async () => {
       const notes = [
         { id: "rIdN", type: "footnotes", target: "footnotes.xml", content: `<w:footnotes ${NS}><w:footnote w:id="1">${para("Foot")}${para("Second foot line")}</w:footnote></w:footnotes>` },
