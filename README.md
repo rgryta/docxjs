@@ -83,6 +83,12 @@ renderDocument(
     wordDocument: WordDocument,
     options: Options
 ): Promise<Node[]>
+
+// measures tab stops again, for example after fonts load or the zoom changes (needs experimental: true)
+remeasureTabStops(
+    root: ParentNode,
+    className: string = "docx"
+): void
 ```
 
 Thumbnails, TOC and etc.

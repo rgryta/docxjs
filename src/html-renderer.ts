@@ -11,7 +11,7 @@ import { Options } from './docx-preview';
 import { DocumentElement } from './document/document';
 import { WmlParagraph } from './document/paragraph';
 import { asArray, encloseFontFamily, escapeClassName, isString, keyBy, mergeDeep } from './utils';
-import { computePixelToPoint, updateTabStop } from './javascript';
+import { measureTabSpans, mergeTabs, registerTabStop } from './javascript';
 import { FontTablePart } from './font-table/font-table';
 import { FooterHeaderReference, SectionProperties } from './document/section';
 import { WmlRun } from './document/run';
@@ -61,7 +61,7 @@ export class HtmlRenderer {
 	usedHederFooterParts: any[] = [];
 
 	defaultTabSize: string;
-	currentTabs: any[] = [];
+	currentTabs: HTMLElement[] = [];
 
 	commentHighlight: any;
 	commentMap: Record<string, Range> = {};
@@ -208,7 +208,9 @@ export class HtmlRenderer {
 			var baseStyle = stylesMap[style.basedOn];
 
 			if (baseStyle) {
+				const tabs = mergeTabs(baseStyle.paragraphProps?.tabs, style.paragraphProps?.tabs);
 				style.paragraphProps = mergeDeep(style.paragraphProps, baseStyle.paragraphProps);
+				if (tabs) style.paragraphProps = { ...style.paragraphProps, tabs };
 				style.runProps = mergeDeep(style.runProps, baseStyle.runProps);
 
 				for (const baseValues of baseStyle.styles) {
@@ -912,10 +914,10 @@ section.${c}>footer { z-index: 1; }
 	}
 
 	renderParagraph(elem: WmlParagraph) {
-		var result = this.toHTML(elem, ns.html, "p");
-
 		const style = this.findStyle(elem.styleName);
-		elem.tabs ??= style?.paragraphProps?.tabs;  //TODO
+		elem.tabs = mergeTabs(style?.paragraphProps?.tabs, elem.tabs);
+
+		var result = this.toHTML(elem, ns.html, "p");
 
 		const numbering = elem.numbering ?? style?.paragraphProps?.numbering;
 
@@ -1094,8 +1096,8 @@ section.${c}>footer { z-index: 1; }
 
 		if (this.options.experimental) {
 			tabSpan.className = this.tabStopClass();
-			var stops = findParent<WmlParagraph>(elem, DomType.Paragraph)?.tabs;
-			this.currentTabs.push({ stops, span: tabSpan });
+			registerTabStop(tabSpan, findParent<WmlParagraph>(elem, DomType.Paragraph)?.tabs, this.defaultTabSize);
+			this.currentTabs.push(tabSpan);
 		}
 
 		return tabSpan;
@@ -1437,13 +1439,7 @@ section.${c}>footer { z-index: 1; }
 		if (!this.options.experimental)
 			return;
 
-		setTimeout(() => {
-			const pixelToPoint = computePixelToPoint();
-
-			for (let tab of this.currentTabs) {
-				updateTabStop(tab.span, tab.stops, this.defaultTabSize, pixelToPoint);
-			}
-		}, 500);
+		setTimeout(() => measureTabSpans(this.currentTabs), 500);
 	}
 
 	createElementNS(ns: any, tagName: string, props?: Partial<Record<any, any>>, children?: any[]) {
