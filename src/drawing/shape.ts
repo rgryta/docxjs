@@ -3,7 +3,7 @@ import { DomType, OpenXmlElement, OpenXmlElementBase } from '../document/dom';
 import xml from '../parser/xml-parser';
 import { DmlTheme } from '../theme/theme';
 import { clamp } from '../utils';
-import { formatNumber, namedColors, notDrawn, VmlTextBox } from '../vml/vml';
+import { formatNumber, namedColors, VmlTextBox } from '../vml/vml';
 
 const shapeNamespace = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
 const drawnPresets = new Set(["rect", "roundRect", "ellipse", "line"]);
@@ -140,12 +140,7 @@ export function parseShape(wsp: Element, parser: DocumentParser): OpenXmlElement
 	result.autoFit = !!bodyPr && !!xml.element(bodyPr, "spAutoFit");
 
 	if (content) {
-		const children = parser.parseTextBoxContent(content);
-
-		if (!children)
-			return notDrawn("depth");
-
-		result.children = children;
+		result.children = parser.parseTextBoxContent(content);
 		result.textBox = parseBodyProps(bodyPr);
 	}
 

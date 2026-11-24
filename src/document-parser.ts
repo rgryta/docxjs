@@ -129,9 +129,6 @@ export class DocumentParser {
 	}
 
 	parseTextBoxContent(element: Element): OpenXmlElement[] {
-		if (this.textBoxDepth >= 16)
-			return null;
-
 		this.textBoxDepth++;
 
 		try {

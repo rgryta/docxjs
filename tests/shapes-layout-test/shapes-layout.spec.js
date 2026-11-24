@@ -106,7 +106,6 @@ describe("DrawingML shapes", function () {
       `<w:pict><v:shapetype id="_x0000_t202" coordsize="21600,21600" path="m,l,21600r21600,l21600,xe"/>${vmlTextBox("First box")}</w:pict>`))),
     para("case-shapetype-second", run(alternate(`<mc:Choice Requires="wps">${inline(100, 20, shapeGraphic(wsp({ w: 100, h: 20, text: textParas("Second box"), bodyPr: '<wps:bodyPr vert="vert270"/>' })))}</mc:Choice>`,
       `<w:pict>${vmlTextBox("Second box")}</w:pict>`))),
-    para("case-depth-16", run(inline(200, 20, shapeGraphic(wsp({ w: 200, h: 20, text: nestedBoxes(15) }))))),
     para("case-depth-17", run(inline(200, 20, shapeGraphic(wsp({ w: 200, h: 20, text: nestedBoxes(16) }))))),
     para("case-unsafe", run(anchor({ h: posH("page", "<wp:posOffset>5px</wp:posOffset>"), v: posV("paragraph", offset(0)) }, shapeGraphic(wsp())))),
     cellTable(run(anchor({ h: posH("column", offset(0)), v: posV("paragraph", offset(0)) }, shapeGraphic(wsp())))),
@@ -344,10 +343,9 @@ ${content}
     expectNear(rect(cell.querySelector("svg").parentElement).left, rect(cell.querySelector("p")).left);
   });
 
-  it("draws text boxes nested 16 deep and marks the 17th", () => {
-    expect(reasons(paragraph("case-depth-16"))).toEqual([]);
-    expect(Array.from(paragraph("case-depth-16").querySelectorAll("p")).some(p => p.textContent == "innermost")).toBeTrue();
-    expect(reasons(paragraph("case-depth-17"))).toEqual(["depth"]);
+  it("draws text boxes nested 17 deep", () => {
+    expect(reasons(paragraph("case-depth-17"))).toEqual([]);
+    expect(Array.from(paragraph("case-depth-17").querySelectorAll("p")).some(p => p.textContent == "innermost")).toBeTrue();
   });
 
   describe("in a two-column section", () => {

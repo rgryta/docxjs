@@ -179,12 +179,7 @@ export function parseVmlElement(elem: Element, parser: DocumentParser): VmlEleme
 	if (textBox) {
 		result.textBox = parseTextBox(textBox, style.get("v-text-anchor"));
 		const content = xml.element(textBox, "txbxContent");
-		const children = content ? parser.parseTextBoxContent(content) : [];
-
-		if (!children)
-			return notDrawn("depth");
-
-		result.children.push(...children);
+		content && result.children.push(...parser.parseTextBoxContent(content));
 	}
 
 	return result;
