@@ -48,6 +48,10 @@ describe("VML shapes", function () {
     para("case-watermark-alternate",
       `<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing/></mc:Choice><mc:Fallback>${`<w:pict>${textPath}</w:pict>`}</mc:Fallback></mc:AlternateContent></w:r>`),
     para("case-watermark-bare", pict(textPath)),
+    '<w:tbl><w:tblGrid><w:gridCol w:w="4000"/><w:gridCol w:w="4000"/></w:tblGrid><w:tr>' +
+      '<w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>left cell</w:t></w:r></w:p></w:tc>' +
+      '<w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr><w:p>' + pict('<v:shape type="#_x0000_t75" style="position:absolute;margin-left:0;mso-position-horizontal-relative:text;width:100pt;height:50pt"><v:imagedata r:id="rIdMissing"/></v:shape>') + '</w:p></w:tc>' +
+      '</w:tr></w:tbl>',
     ...Array.from({ length: 20 }, (_, i) => para(`filler-${i}`)),
   ].join("\n");
 
@@ -255,6 +259,11 @@ ${body}
     window.scrollTo(0, 0);
     expect(rect(section().querySelector('footer svg rect[fill="#0000ff"]')).top).toBeLessThan(rect(text).top);
     expect(text.contains(hit)).toBeTrue();
+  });
+
+  it("places a text-relative shape in a table cell from the cell", () => {
+    const cell = container.querySelectorAll("article td")[1];
+    expectNear(rect(cell.querySelector("svg").parentElement).left, rect(cell.querySelector("p")).left);
   });
 
   it("does not mark a picture shape whose shape type is missing", () => {

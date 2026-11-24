@@ -1342,7 +1342,9 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
 			set("margin-top", pt(box.y));
 		} else if (box.position == "absolute") {
 			set("position", "absolute");
-			const left = vmlEdge(vmlHorizontalFrames, box.hRelative ?? "text", box.hAlign, box.x, box.width);
+			const hRelative = box.hRelative ?? "text";
+			// a table cell is not positioned, so a text-relative shape keeps its place in the cell
+			const left = this.currentCellPosition && hRelative == "text" ? null : vmlEdge(vmlHorizontalFrames, hRelative, box.hAlign, box.x, box.width);
 			const top = vmlEdge(vmlVerticalFrames, box.vRelative, box.vAlign, box.y, box.height);
 
 			if (left == null)
