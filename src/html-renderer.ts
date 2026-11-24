@@ -13,9 +13,10 @@ import { WmlParagraph } from './document/paragraph';
 import { asArray, encloseFontFamily, escapeClassName, isString, keyBy, mergeDeep } from './utils';
 import { computePixelToPoint, updateTabStop } from './javascript';
 import { FontTablePart } from './font-table/font-table';
-import { FooterHeaderReference, SectionProperties } from './document/section';
+import { FooterHeaderReference, SectionProperties, SectionType } from './document/section';
 import { WmlRun } from './document/run';
 import { WmlBookmarkStart } from './document/bookmarks';
+import { WmlFieldResult } from './document/fields';
 import { IDomStyle } from './document/style';
 import { WmlBaseNote, WmlFootnote } from './notes/elements';
 import { ThemePart } from './theme/theme-part';
@@ -336,6 +337,16 @@ export class HtmlRenderer {
 			const section = pages[i][0];
 			let props = section.sectProps;
 			const pageElement = this.createPageElement(this.className, props, document.cssStyle);
+			const pageNumber = props?.pageNumber;
+
+			if (pageNumber?.start != null && prevProps != props && (!prevProps || props.type != SectionType.Continuous && props.type != SectionType.NextColumn))
+				pageElement.setAttribute("data-page-start", String(pageNumber.start));
+
+			if (pageNumber?.chapStyle || pageNumber?.format && pageNumber.format != "decimal")
+				pageElement.setAttribute("data-page-format", pageNumber.chapStyle ? "other" : pageNumber.format);
+
+			if (prevProps != props && (props?.type == SectionType.EvenPage || props?.type == SectionType.OddPage))
+				pageElement.setAttribute("data-page-parity", props.type == SectionType.EvenPage ? "even" : "odd");
 
 			this.options.renderHeaders && this.renderHeaderFooter(props.headerRefs, props,
 				result.length, prevProps != props, pageElement);
@@ -348,12 +359,12 @@ export class HtmlRenderer {
 			}
 
 			if (this.options.renderFootnotes) {
-				const notes = this.renderNotes(this.currentFootnoteIds, this.footnoteMap);
+				const notes = this.renderNotes(this.currentFootnoteIds, this.footnoteMap, "footnotes");
 				notes && pageElement.appendChild(notes);
 			}
 
 			if (this.options.renderEndnotes && i == l - 1) {
-				const notes = this.renderNotes(this.currentEndnoteIds, this.endnoteMap);
+				const notes = this.renderNotes(this.currentEndnoteIds, this.endnoteMap, "endnotes");
 				notes && pageElement.appendChild(notes);
 			}
 
@@ -375,9 +386,16 @@ export class HtmlRenderer {
 			?? (page % 2 == 1 && evenAndOddHeaders ? refs.find(x => x.type == "even") : null)
 			?? refs.find(x => x.type == "default");
 
-		var part = ref && this.document.findPartByRelId(ref.id, this.document.documentPart) as BaseHeaderFooterPart;
+		if (ref?.type == "first")
+			into.setAttribute("data-docx-first-page", "");
 
-		if (part) {
+		// with paginate on, the alternates are rendered hidden for the pages it splits off
+		for (const alt of refs.filter(x => x == ref || this.options.paginate && (x.type == "default" || (x.type == "even" && evenAndOddHeaders)))) {
+			var part = this.document.findPartByRelId(alt.id, this.document.documentPart) as BaseHeaderFooterPart;
+
+			if (!part)
+				continue;
+
 			this.currentPart = part;
 			if (!this.usedHederFooterParts.includes(part.path)) {
 				this.processElement(part.rootElement);
@@ -395,6 +413,11 @@ export class HtmlRenderer {
 					el.style.minHeight = `calc(${props.pageMargins.bottom} - ${props.pageMargins.footer})`;
 				}
 			}
+
+			el.setAttribute("data-docx-hf", alt.type);
+
+			if (alt != ref)
+				el.style.display = "none";
 
 			this.currentPart = null;
 		}
@@ -419,6 +442,12 @@ export class HtmlRenderer {
 			|| prev.pageSize?.height != next.pageSize?.height;
 	}
 
+	// Word's lastRenderedPageBreak hints mark where sections start; without them the section type decides.
+	isNewPageSection(prev: SectionProperties, next: SectionProperties): boolean {
+		return this.options.ignoreLastRenderedPageBreak && prev !== next
+			&& (!next?.type || next.type == SectionType.NextPage || next.type == SectionType.EvenPage || next.type == SectionType.OddPage);
+	}
+
 	splitBySection(elements: OpenXmlElement[], defaultProps: SectionProperties): Section[] {
 		var current: Section = { sectProps: null, elements: [], pageBreak: false };
 		var result = [current];
@@ -429,7 +458,8 @@ export class HtmlRenderer {
 				const s = this.findStyle(p.styleName);
 
 				if (p.pageBreakBefore || s?.paragraphProps?.pageBreakBefore) {
-					current.sectProps = sectProps;
+					// sectProps may still hold an earlier section's props; leave the piece to the backward fill below
+					current.sectProps = null;
 					current.pageBreak = true;
 					current = { sectProps: null, elements: [], pageBreak: false };
 					result.push(current);
@@ -475,6 +505,9 @@ export class HtmlRenderer {
 							elem.children.push(newRun);
 							breakRun.children = runChildren.slice(rBreakIndex);
 						}
+					} else if (elem === elements[elements.length - 1]) {
+						// a break that ends the body still makes a page; elsewhere the mark stays with the break (Word 2013+)
+						current.elements.push({ ...elem, children: [] });
 					}
 				}
 			}
@@ -493,21 +526,29 @@ export class HtmlRenderer {
 		return result;
 	}
 
+	/** Groups the pieces into pages; each boundary between non-empty pieces ends at most one page, and empty pieces never start one. */
 	groupByPageBreaks(sections: Section[]): Section[][] {
-		let current = [];
-		let prev: SectionProperties;
+		let current: Section[] = [];
+		let prev: Section = null;
+		let pageBreak = false;
 		const result: Section[][] = [current];
 
 		for (let s of sections) {
-			current.push(s);
+			// an empty piece can carry the next section's props, which would give the open page that section's footer
+			if (!s.elements.length) {
+				pageBreak ||= s.pageBreak;
+				continue;
+			}
 
-			if (this.options.ignoreLastRenderedPageBreak || s.pageBreak || this.isPageBreakSection(prev, s.sectProps))
+			if (prev && (pageBreak || this.isPageBreakSection(prev.sectProps, s.sectProps) || this.isNewPageSection(prev.sectProps, s.sectProps)))
 				result.push(current = []);
 
-			prev = s.sectProps;
+			prev = s;
+			current.push(s);
+			pageBreak = s.pageBreak;
 		}
 
-		return result.filter(x => x.length > 0);
+		return current.length ? result : [[sections[0]]];
 	}
 
 	renderWrapper(children: HTMLElement[]) {
@@ -530,7 +571,14 @@ section.${c}>footer { z-index: 1; }
 .${c} table { border-collapse: collapse; }
 .${c} table td, .${c} table th { vertical-align: top; }
 .${c} p { margin: 0pt; min-height: 1em; }
+.${c} p.${c}-continued::before { content: none; }
 .${c} span { white-space: pre-wrap; overflow-wrap: break-word; }
+@supports (line-height: round(up, 1em, 1px)) {
+	/* Word 'auto' line spacing is the multiple times the font size rounded up to whole pixels
+	   (Word for the web: 10pt = 13.33px gives 14px lines at single spacing). Without --docx-line
+	   (exact or at-least spacing) the declaration is invalid and the run inherits its paragraph's. */
+	.${c} p span { line-height: calc(var(--docx-line) * round(up, 1em, 1px)); }
+}
 .${c} a { color: inherit; text-decoration: inherit; }
 .${c} svg { fill: transparent; }
 `;
@@ -717,11 +765,13 @@ section.${c}>footer { z-index: 1; }
 		];
 	}
 
-	renderNotes(noteIds: string[], notesMap: Record<string, WmlBaseNote>) {
+	renderNotes(noteIds: string[], notesMap: Record<string, WmlBaseNote>, kind: "footnotes" | "endnotes") {
 		var notes = noteIds.map(id => notesMap[id]).filter(x => x);
 
 		if (notes.length > 0) {
-			return this.h({ tagName: "ol", children: this.renderElements(notes) });
+			const list = this.h({ tagName: "ol", children: this.renderElements(notes) }) as HTMLElement;
+			list.setAttribute("data-docx-notes", kind);  // paginate keeps footnotes on the page of their references
+			return list;
 		}
 	}
 
@@ -738,6 +788,9 @@ section.${c}>footer { z-index: 1; }
 
 			case DomType.Run:
 				return this.renderRun(elem as WmlRun);
+
+			case DomType.FieldResult:
+				return this.renderFieldResult(elem as WmlFieldResult);
 
 			case DomType.Table:
 				return this.renderTable(elem);
@@ -912,6 +965,13 @@ section.${c}>footer { z-index: 1; }
 	}
 
 	renderParagraph(elem: WmlParagraph) {
+		// Direct keep-with-next / keep-lines formatting (the style variants come from the style rules).
+		if (elem.keepNext != null)
+			(elem.cssStyle ??= {})["break-after"] = elem.keepNext ? "avoid" : "auto";
+
+		if (elem.keepLines != null)
+			(elem.cssStyle ??= {})["break-inside"] = elem.keepLines ? "avoid" : "auto";
+
 		var result = this.toHTML(elem, ns.html, "p");
 
 		const style = this.findStyle(elem.styleName);
@@ -1081,7 +1141,9 @@ section.${c}>footer { z-index: 1; }
 
 	renderFootnoteReference(elem: WmlNoteReference) {
 		this.currentFootnoteIds.push(elem.id);
-		return this.h({ tagName: "sup", children: [`${this.currentFootnoteIds.length}`] });
+		const ref = this.h({ tagName: "sup", children: [`${this.currentFootnoteIds.length}`] }) as HTMLElement;
+		ref.setAttribute("data-docx-footnote", "");
+		return ref;
 	}
 
 	renderEndnoteReference(elem: WmlNoteReference) {
@@ -1103,6 +1165,12 @@ section.${c}>footer { z-index: 1; }
 
 	renderBookmarkStart(elem: WmlBookmarkStart) {
 		return this.h({ tagName: "span", id: elem.name });
+	}
+
+	renderFieldResult(elem: WmlFieldResult) {
+		const result = this.h({ tagName: "span", children: this.renderElements(elem.children) }) as HTMLElement;
+		result.setAttribute("data-docx-field", elem.field);
+		return result;
 	}
 
 	renderRun(elem: WmlRun) {
@@ -1134,7 +1202,18 @@ section.${c}>footer { z-index: 1; }
 		if (elem.columns)
 			children.push(this.renderTableColumns(elem.columns));
 
-		children.push(...this.renderElements(elem.children));
+		// Leading rows marked as header rows (w:tblHeader) go in <thead>, so they
+		// repeat at the top of every page when the table is printed across pages.
+		const rows = elem.children ?? [];
+		let headerCount = 0;
+
+		while (headerCount < rows.length && (rows[headerCount] as WmlTableRow).isHeader)
+			headerCount++;
+
+		if (headerCount > 0)
+			children.push(this.h({ ns: ns.html, tagName: "thead", children: this.renderElements(rows.slice(0, headerCount)) }));
+
+		children.push(...this.renderElements(rows.slice(headerCount)));
 
 		this.currentVerticalMerge = this.tableVerticalMerges.pop();
 		this.currentCellPosition = this.tableCellPositions.pop();
