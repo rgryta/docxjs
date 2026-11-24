@@ -219,6 +219,17 @@ describe("Page fields and section breaks", function () {
     expect(shownText(div, "FOOTER")).toEqual(["1", "2", "3", "5", "0", "1"]);
   });
 
+  it("starts numbering at the first section's pgNumType start when that section is continuous", async () => {
+    div = await render({
+      body: para("A") + pageBreak + para("B"),
+      sectPr: `${FOOTER}<w:type w:val="continuous"/><w:pgNumType w:start="5"/>${PAGE}`,
+      parts: [pageFooter()],
+    });
+
+    expect(docx.paginate(div)).toBe(true);
+    expect(shownText(div, "FOOTER")).toEqual(["5", "6"]);
+  });
+
   it("fills a paragraph-level simple PAGE field in a header", async () => {
     div = await render({
       body: para("A") + pageBreak + para("B"),

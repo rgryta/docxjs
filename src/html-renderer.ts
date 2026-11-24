@@ -339,7 +339,7 @@ export class HtmlRenderer {
 			const pageElement = this.createPageElement(this.className, props, document.cssStyle);
 			const pageNumber = props?.pageNumber;
 
-			if (pageNumber?.start != null && prevProps != props && props.type != SectionType.Continuous && props.type != SectionType.NextColumn)
+			if (pageNumber?.start != null && prevProps != props && (!prevProps || props.type != SectionType.Continuous && props.type != SectionType.NextColumn))
 				pageElement.setAttribute("data-page-start", String(pageNumber.start));
 
 			if (pageNumber?.chapStyle || pageNumber?.format && pageNumber.format != "decimal")
