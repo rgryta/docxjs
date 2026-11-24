@@ -228,9 +228,6 @@ function parseVmlGroup(elem: Element, parser: DocumentParser, frame: GroupFrame)
 
 	const children = parser.nested(() => xml.elements(elem).map(child => parseVmlElement(child, parser, childFrame)).filter(Boolean));
 
-	if (!children)
-		return notDrawn("depth");
-
 	const group = new DrawingGroup();
 	group.width = width;
 	group.height = height;

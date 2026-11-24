@@ -98,6 +98,8 @@ describe("Shape groups", function () {
     para("case-bad-coordsize", run(pict('<v:group style="width:100pt;height:50pt" coordsize="a,b"><v:rect style="width:10;height:5" fillcolor="#00ff00"/></v:group>'))),
     para("case-depth-dml", run(inline(100, 50, groupGraphic(deepDml(1))))),
     para("case-depth-vml", run(pict(deepVml(1)))),
+    para("case-depth-choice", run(`<mc:AlternateContent><mc:Choice Requires="wpg">${inline(100, 50, groupGraphic(deepDml(1)))}</mc:Choice>` +
+      `<mc:Fallback>${pict('<v:oval style="width:20pt;height:10pt"/>')}</mc:Fallback></mc:AlternateContent>`)),
     para("case-depth-text", run(inline(100, 50, throughTextBoxes(1)))),
     para("case-bent", run(inline(100, 50, groupGraphic(wgp(identity(100, 50),
       box("00FF00", 0, 0, 10, 5), shape({ geom: "bentConnector3", frame: xfrm({ w: 50 * PT, h: 20 * PT }), spPr: `<a:ln>${solid("000000")}</a:ln>` })))))),
@@ -255,15 +257,12 @@ ${body}
       expect(paragraph(id).innerHTML).not.toContain("NaN");
   });
 
-  it("draws groups nested 16 deep and marks the 17th on both walks", () => {
-    for (const id of ["case-depth-dml", "case-depth-vml"]) {
-      expect(filled(paragraph(id), "#00aa00").length).withContext(id).toBe(16);
-      expect(reasons(paragraph(id))).withContext(id).toEqual(["depth"]);
+  it("draws groups nested 20 deep on both walks and through text boxes", () => {
+    for (const id of ["case-depth-dml", "case-depth-vml", "case-depth-choice"]) {
+      expect(filled(paragraph(id), "#00aa00").length).withContext(id).toBe(20);
+      expect(reasons(paragraph(id))).withContext(id).toEqual([]);
     }
-  });
-
-  it("counts text boxes and groups on one depth counter", () => {
-    expect(reasons(paragraph("case-depth-text"))).toEqual(["depth"]);
+    expect(reasons(paragraph("case-depth-text"))).toEqual([]);
   });
 
   it("marks a connector kind it does not draw and keeps its siblings", () => {

@@ -10,7 +10,6 @@ const shapeNamespace = "http://schemas.microsoft.com/office/word/2010/wordproces
 const groupNamespace = "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup";
 const drawnPresets = new Set(["rect", "roundRect", "ellipse", "line"]);
 const groupProps = new Set(["cNvPr", "cNvGrpSpPr", "nvGrpSpPr", "grpSpPr", "extLst"]);
-const maxDepth = 16;
 const maxEmu = 1e12;
 
 type Rgb = number[];
@@ -123,14 +122,14 @@ function drawsShapes(drawing: Element): boolean {
 	const shapes = graphicData ? xml.elements(graphicData) : [];
 
 	return shapes.length > 0 && shapes.every(s => s.namespaceURI == shapeNamespace && s.localName == "wsp" && isDrawableShape(s)
-		|| s.namespaceURI == groupNamespace && s.localName == "wgp" && drawsGroup(s, 1));
+		|| s.namespaceURI == groupNamespace && s.localName == "wgp" && drawsGroup(s));
 }
 
-function drawsGroup(group: Element, depth: number): boolean {
-	return depth <= maxDepth && xml.elements(group).every(child => groupProps.has(child.localName)
+function drawsGroup(group: Element): boolean {
+	return xml.elements(group).every(child => groupProps.has(child.localName)
 		|| child.localName == "wsp" && isDrawableShape(child, true)
 		|| child.localName == "pic"
-		|| child.localName == "grpSp" && drawsGroup(child, depth + 1));
+		|| child.localName == "grpSp" && drawsGroup(child));
 }
 
 export function parseShape(wsp: Element, parser: DocumentParser): OpenXmlElement {
@@ -281,9 +280,6 @@ function parseGroup(group: Element, parser: DocumentParser, width: number, heigh
 		.filter(child => !groupProps.has(child.localName))
 		.map(child => parseGroupChild(child, parser, frame))
 		.filter(child => child != null));
-
-	if (!children)
-		return notDrawn("depth");
 
 	const result = new DrawingGroup();
 	result.width = width;
