@@ -878,9 +878,7 @@ export class DocumentParser {
 
 		let wrapType: "wrapTopAndBottom" | "wrapNone" | null = null;
 		let simplePos = xml.boolAttr(node, "simplePos");
-		let behindDoc = xml.boolAttr(node, "behindDoc");
-
-		let posX = { align: "left" };
+		let align = "left";
 
 		for (var n of xml.elements(node)) {
 			switch (n.localName) {
@@ -894,7 +892,7 @@ export class DocumentParser {
 						var alignNode = xml.element(n, "align");
 
 						if (alignNode)
-							posX.align = alignNode.textContent;
+							align = alignNode.textContent;
 					}
 					break;
 
@@ -921,13 +919,13 @@ export class DocumentParser {
 		if (wrapType == "wrapTopAndBottom") {
 			result.cssStyle['display'] = 'block';
 
-			if (posX.align) {
-				result.cssStyle['text-align'] = posX.align;
+			if (align) {
+				result.cssStyle['text-align'] = align;
 				result.cssStyle['width'] = "100%";
 			}
 		}
-		else if (isAnchor && (posX.align == 'left' || posX.align == 'right')) {
-			result.cssStyle["float"] = posX.align;
+		else if (isAnchor && (align == 'left' || align == 'right')) {
+			result.cssStyle["float"] = align;
 		}
 
 		return result;
