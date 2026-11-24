@@ -704,7 +704,7 @@ export class HtmlRenderer {
 		const fontSize = styles?.some(s => (s.id == null || (s.isDefault && s.target == "p"))
 			&& s.styles.some(x => x.target == "span" && x.values["font-size"])) ? "" : " font-size: 10pt;";
 		var styleText = `${wrapperStyle}
-.${c} { color: black; hyphens: auto; text-underline-position: from-font; }
+.${c} { color: black; hyphens: ${this.document.settingsPart?.settings?.autoHyphenation ? "auto" : "manual"}; text-underline-position: from-font; }
 section.${c} { box-sizing: border-box; display: flex; flex-flow: column nowrap; position: relative; overflow: hidden;${fontSize} }
 section.${c}>article { margin-bottom: auto; z-index: 1; }
 section.${c}>header, section.${c}>footer { z-index: 0; }
