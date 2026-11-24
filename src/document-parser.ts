@@ -635,8 +635,8 @@ export class DocumentParser {
 	parseRun(node: Element, parent?: OpenXmlElement): WmlRun {
 		var result: WmlRun = <WmlRun>{ type: DomType.Run, parent: parent, children: [] };
 
-		for (const child of xml.elements(node)) {
-			const c = this.checkAlternateContent(child);
+		for (let c of xml.elements(node)) {
+			c = this.checkAlternateContent(c);
 
 			switch (c?.localName) {
 				case "t":
@@ -736,7 +736,7 @@ export class DocumentParser {
 					break;
 
 				case "pict":
-					result.children.push(this.parseVmlPicture(c, c === child));
+					result.children.push(this.parseVmlPicture(c));
 					break;
 
 				case "rPr":
@@ -805,11 +805,11 @@ export class DocumentParser {
 		});
 	}
 
-	parseVmlPicture(elem: Element, watermarkAllowed = false): OpenXmlElement {
+	parseVmlPicture(elem: Element): OpenXmlElement {
 		const result = { type: DomType.VmlPicture, children: [] };
 
 		for (const el of xml.elements(elem)) {
-			const child = parseVmlElement(el, this, watermarkAllowed);
+			const child = parseVmlElement(el, this);
 			child && result.children.push(child);
 		}
 

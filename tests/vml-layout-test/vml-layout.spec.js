@@ -14,7 +14,6 @@ describe("VML shapes", function () {
   const pict = inner => `<w:r><w:pict>${inner}</w:pict></w:r>`;
   const para = (id, ...runs) => `<w:p><w:r><w:t xml:space="preserve">${id} </w:t></w:r>${runs.join("")}</w:p>`;
   const textBox = text => `<v:textbox><w:txbxContent><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:txbxContent></v:textbox>`;
-  const textPath = '<v:shape style="width:100pt;height:20pt"><v:textpath string="DRAFT"/></v:shape>';
 
   const body = [
     para("case-first"),
@@ -45,9 +44,6 @@ describe("VML shapes", function () {
       pict('<v:shape type="#missing" style="width:10pt;height:10pt"/>')),
     para("case-freeform", pict(`<v:shape coordsize="3000,3000" style="width:10pt;height:10pt" path="m0,0l${Array.from({ length: 3000 }, (_, i) => `${i},${i % 7}`).join(",")}e"/>`)),
     para("case-picture-no-type", pict('<v:shape type="#missing" style="width:10pt;height:10pt"><v:imagedata r:id="rIdMissing"/></v:shape>')),
-    para("case-watermark-alternate",
-      `<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing/></mc:Choice><mc:Fallback>${`<w:pict>${textPath}</w:pict>`}</mc:Fallback></mc:AlternateContent></w:r>`),
-    para("case-watermark-bare", pict(textPath)),
     '<w:tbl><w:tblGrid><w:gridCol w:w="4000"/><w:gridCol w:w="4000"/></w:tblGrid><w:tr>' +
       '<w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>left cell</w:t></w:r></w:p></w:tc>' +
       '<w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr><w:p>' + pict('<v:shape type="#_x0000_t75" style="position:absolute;margin-left:0;mso-position-horizontal-relative:text;width:100pt;height:50pt"><v:imagedata r:id="rIdMissing"/></v:shape>') + '</w:p></w:tc>' +
@@ -236,12 +232,6 @@ ${body}
   it("draws a freeform with thousands of points", () => {
     expect(paragraph("case-freeform").querySelector("[data-docx-not-drawn]")).toBeNull();
     expect(paragraph("case-freeform").querySelector("svg path")).not.toBeNull();
-  });
-
-  it("marks a watermark as such only in a bare run", () => {
-    const reason = id => paragraph(id).querySelector("[data-docx-not-drawn]")?.getAttribute("data-docx-not-drawn");
-    expect(reason("case-watermark-alternate")).toBe("vml-element");
-    expect(reason("case-watermark-bare")).toBe("watermark");
   });
 
   it("keeps a shape behind the text visible in the header and footer", () => {

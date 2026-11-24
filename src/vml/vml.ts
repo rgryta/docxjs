@@ -9,7 +9,7 @@ const vmlNamespace = "urn:schemas-microsoft-com:vml";
 const modifierTags = new Set(["stroke", "fill", "path", "formulas", "f", "handles", "h", "shadow", "textbox",
 	"imagedata", "shapetype", "lock", "wrap", "anchorlock"]);
 
-export type VmlSvgTag = "path" | "rect" | "ellipse" | "line" | "image" | "g";
+export type VmlSvgTag = "path" | "rect" | "ellipse" | "line" | "image";
 
 export interface VmlSvgPart {
 	tagName: VmlSvgTag;
@@ -67,7 +67,7 @@ export class VmlElement extends OpenXmlElementBase {
 	}
 }
 
-export function parseVmlElement(elem: Element, parser: DocumentParser, watermarkAllowed = false): VmlElement {
+export function parseVmlElement(elem: Element, parser: DocumentParser): VmlElement {
 	if (elem.namespaceURI != vmlNamespace)
 		return null;
 
@@ -104,7 +104,6 @@ export function parseVmlElement(elem: Element, parser: DocumentParser, watermark
 
 	let stroke: Element = null, fill: Element = null, textBox: Element = null, imageData: Element = null;
 	let hasTextPath = false;
-	const innerMarks: VmlSvgPart[] = [];
 
 	for (const el of xml.elements(elem)) {
 		switch (el.localName) {
@@ -117,16 +116,11 @@ export function parseVmlElement(elem: Element, parser: DocumentParser, watermark
 			case "wrap":
 				result.wrapType = xml.attr(el, "type");
 				break;
-
-			default:
-				if (el.namespaceURI == vmlNamespace && !modifierTags.has(el.localName))
-					innerMarks.push(markPart("vml-element"));
-				break;
 		}
 	}
 
 	if (hasTextPath)
-		return notDrawn(watermarkAllowed && elem.localName == "shape" ? "watermark" : "vml-element");
+		return notDrawn("vml-element");
 
 	const style = parseVmlStyle(xml.attr(elem, "style"));
 	result.box = parseBox(style);
@@ -165,15 +159,11 @@ export function parseVmlElement(elem: Element, parser: DocumentParser, watermark
 					}
 				} else if (!textBox) {
 					return notDrawn(pathText ? "vml-path" : "vml-shape");
-				} else if (pathText) {
-					innerMarks.push(markPart("vml-path"));
 				}
 				break;
 			}
 		}
 	}
-
-	result.parts.push(...innerMarks);
 
 	const flip = style.get("flip");
 	if (flip)
@@ -192,10 +182,6 @@ function notDrawn(reason: string): VmlElement {
 	const result = new VmlElement();
 	result.notDrawn = reason;
 	return result;
-}
-
-function markPart(reason: string): VmlSvgPart {
-	return { tagName: "g", attrs: { "data-docx-not-drawn": reason } };
 }
 
 function readShapeType(elem: Element): VmlShapeType {
