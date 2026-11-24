@@ -26,6 +26,7 @@ export enum DomType {
     SimpleField = "simpleField",
     ComplexField = "complexField",
     Instruction = "instruction",
+    FieldResult = "fieldResult",
 	VmlPicture = "vmlPicture",
 	MmlMath = "mmlMath",
 	MmlMathParagraph = "mmlMathParagraph",

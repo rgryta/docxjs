@@ -11,7 +11,7 @@ import xml from './parser/xml-parser';
 import { parseRunProperties, WmlRun } from './document/run';
 import { parseBookmarkEnd, parseBookmarkStart } from './document/bookmarks';
 import { IDomStyle, IDomSubStyle } from './document/style';
-import { WmlFieldChar, WmlFieldSimple, WmlInstructionText } from './document/fields';
+import { WmlFieldChar, WmlFieldResult, WmlFieldSimple, WmlInstructionText } from './document/fields';
 import { convertLength, LengthUsage, LengthUsageType } from './document/common';
 import { notDrawn, parseVmlElement, VmlShapeType } from './vml/vml';
 import { canDrawChoice, isDrawableShape, parseDrawingGroup, parseShape, parseShapeDrawing } from './drawing/shape';
@@ -508,7 +508,7 @@ export class DocumentParser {
 		return { type: DomType.AltChunk, children: [], id: xml.attr(node, "id") };
 	}
 
-	parseParagraph(node: Element): OpenXmlElement {
+	parseParagraph(node: Element, fillFields: boolean = true): OpenXmlElement {
 		var result = <WmlParagraph>{ type: DomType.Paragraph, children: [] };
 
 		for (let el of xml.elements(node)) {
@@ -551,7 +551,7 @@ export class DocumentParser {
 					break;
 
 				case "sdt":
-					result.children.push(...this.parseSdt(el, e => this.parseParagraph(e).children));
+					result.children.push(...this.parseSdt(el, e => this.parseParagraph(e, false).children));
 					break;
 
 				case "ins":
@@ -559,10 +559,19 @@ export class DocumentParser {
 					break;
 
 				case "del":
-					result.children.push(this.parseChange(DomType.Deleted, el, e => this.parseParagraph(e)));
+					result.children.push(this.parseChange(DomType.Deleted, el, e => this.parseParagraph(e, false)));
 					break;
+
+				case "fldSimple": {
+					const field = pageFieldResult(xml.attr(el, "instr"), xml.elements(el, "r").map(r => this.parseRun(r, result)));
+					field && result.children.push(field);
+					break;
+				}
 			}
 		}
+
+		if (fillFields)
+			wrapPageFields(result.children);
 
 		return result;
 	}
@@ -1121,7 +1130,7 @@ export class DocumentParser {
 					break;
 
 				case "tblHeader":
-					row.isHeader = xml.boolAttr(c, "val");
+					row.isHeader = xml.boolAttr(c, "val", true);
 					break;
 
 				case "gridBefore":
@@ -1372,6 +1381,16 @@ export class DocumentParser {
 						style["direction"] = "rtl";
 					break;
 
+				case "keepLines":
+					// Paragraph stays on one page: honoured by printing and paged layout.
+					style["break-inside"] = xml.boolAttr(c, "val", true) ? "avoid" : "auto";
+					break;
+
+				case "keepNext":
+					// Paragraph stays on the page of the next one (headings).
+					style["break-after"] = xml.boolAttr(c, "val", true) ? "avoid" : "auto";
+					break;
+
 				case "bCs":
 				case "iCs":
 				case "szCs":
@@ -1383,8 +1402,6 @@ export class DocumentParser {
 				case "webHidden": //TODO - maybe web-hidden should be implemented
 				case "pageBreakBefore": //TODO - maybe ignore 
 				case "suppressLineNumbers": //TODO - maybe ignore
-				case "keepLines": //TODO - maybe ignore
-				case "keepNext": //TODO - maybe ignore
 				case "widowControl": //TODO - maybe ignore 
 				case "noProof": //ignore spellcheck
 					//TODO ignore
@@ -1487,13 +1504,10 @@ export class DocumentParser {
 		if (after) style["margin-bottom"] = after;
 
 		if (line) {
+			style["--docx-run-line-height"] = lineRule == "atLeast" ? "normal" : "initial";
 			switch (lineRule) {
 				case "auto":
 					style["line-height"] = `${(Number(line) / 240).toFixed(2)}`;
-					break;
-
-				case "atLeast":
-					style["line-height"] = `calc(100% + ${convertLength(line, LengthUsage.Dxa)})`;
 					break;
 
 				default:
@@ -1739,5 +1753,69 @@ class values {
 		if (xml.boolAttr(c, "noVBand") || (val & 0x0400)) className += " no-vband";
 
 		return className.trim();
+	}
+}
+
+const pageFieldInstruction = /^\s*(PAGE|NUMPAGES)(\s+\\\*\s*(MERGEFORMAT|ARABIC))*\s*$/i;
+
+function pageFieldResult(instruction: string, children: OpenXmlElement[]): WmlFieldResult | null {
+	const field = instruction?.match(pageFieldInstruction)?.[1].toUpperCase();
+
+	if (!field || children.some(c => c.type == DomType.Run && c.children.some(x => x.type == DomType.Break)))
+		return null;
+
+	return { type: DomType.FieldResult, field: field as WmlFieldResult["field"], children };
+}
+
+/**
+ * Wraps the result of each complex PAGE or NUMPAGES field among the paragraph's children in a
+ * FieldResult, so the pages can show their own numbers. A field nested in another field, or one
+ * still open at the paragraph end, keeps its saved result.
+ */
+function wrapPageFields(children: OpenXmlElement[]) {
+	type Field = { fillable: boolean, instruction: string, run: WmlRun, separate: number, end: number, savedText: string };
+	const open: Field[] = [];
+	const closed: Field[] = [];
+
+	children.forEach((child, index) => {
+		if (child.type != DomType.Run)
+			return;
+
+		for (const c of child.children) {
+			const top = open[open.length - 1];
+
+			if (c.type == DomType.ComplexField) {
+				const charType = (c as WmlFieldChar).charType;
+
+				if (charType == "begin") {
+					open.forEach(f => f.fillable = false);
+					open.push({ fillable: !open.length, instruction: "", run: child as WmlRun, separate: -1, end: -1, savedText: "" });
+				} else if (charType == "separate" && top) {
+					top.separate = index;
+				} else if (charType == "end" && top) {
+					open.pop();
+					top.end = index;
+					top.fillable && closed.push(top);
+				}
+			} else if (c.type == DomType.Instruction && top) {
+				top.instruction += (c as WmlInstructionText).text;
+			} else if (c.type == DomType.Text && top?.separate == index) {
+				top.savedText += (c as WmlText).text;
+			}
+		}
+	});
+
+	for (const f of closed.reverse()) {
+		const between = f.separate < 0 ? [] : children.slice(f.separate + 1, f.end);
+
+		if (between.some(c => c.type == DomType.Run)) {
+			const field = pageFieldResult(f.instruction, between);
+			field && children.splice(f.separate + 1, between.length, field);
+		} else if (between.length == 0) {
+			// the result text sits in the separate run, which renderRun hides; show it in a run of its own
+			const run: WmlRun = { ...f.run, fieldRun: false, children: [<WmlText>{ type: DomType.Text, text: f.savedText }] };
+			const field = pageFieldResult(f.instruction, [run]);
+			field && children.splice(f.end, 0, field);
+		}
 	}
 }

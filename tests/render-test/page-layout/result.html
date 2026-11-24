@@ -7,11 +7,16 @@ section.docx>article { margin-bottom: auto; z-index: 1; }
 section.docx>header, section.docx>footer { z-index: 0; }
 .docx table { border-collapse: collapse; }
 .docx table td, .docx table th { vertical-align: top; }
-.docx p { margin: 0pt; min-height: 1em; }
-.docx span { white-space: pre-wrap; overflow-wrap: break-word; }
+.docx p { margin: 0pt; min-height: 1em; --docx-run-line-height: initial; }
+.docx p.docx-continued::before { content: none; }
+.docx span { white-space: pre-wrap; overflow-wrap: break-word; line-height: var(--docx-run-line-height, inherit); }
 .docx a { color: inherit; text-decoration: inherit; }
 .docx svg { fill: transparent; }
 </style><!--docxjs document styles--><style>.docx {
+  font-family: 'Liberation Serif', NSimSun;
+  font-size: 12.00pt;
+}
+.docx {
   font-family: 'Liberation Serif', NSimSun;
   min-height: 12.00pt;
   font-size: 12.00pt;
@@ -20,6 +25,10 @@ section.docx>header, section.docx>footer { z-index: 0; }
 }
 p.docx_normal {
 }
+p.docx_normal {
+  font-family: 'Liberation Serif', NSimSun;
+  font-size: 12.00pt;
+}
 p.docx_normal span {
   font-family: 'Liberation Serif', NSimSun;
   color: black;
@@ -27,8 +36,13 @@ p.docx_normal span {
   font-size: 12.00pt;
 }
 p.docx_style14 {
+  break-after: avoid;
   margin-top: 12.00pt;
   margin-bottom: 6.00pt;
+}
+p.docx_style14 {
+  font-family: 'Liberation Sans', 'Microsoft YaHei';
+  font-size: 14.00pt;
 }
 p.docx_style14 span {
   font-family: 'Liberation Sans', 'Microsoft YaHei';
@@ -39,7 +53,12 @@ p.docx_style14 span {
 p.docx_style15 {
   margin-top: 0.00pt;
   margin-bottom: 7.00pt;
+  --docx-run-line-height: initial;
   line-height: 1.15;
+}
+p.docx_style15 {
+  font-family: 'Liberation Serif', NSimSun;
+  font-size: 12.00pt;
 }
 p.docx_style15 span {
   font-family: 'Liberation Serif', NSimSun;
@@ -50,7 +69,12 @@ p.docx_style15 span {
 p.docx_style16 {
   margin-top: 0.00pt;
   margin-bottom: 7.00pt;
+  --docx-run-line-height: initial;
   line-height: 1.15;
+}
+p.docx_style16 {
+  font-family: 'Liberation Serif', NSimSun;
+  font-size: 12.00pt;
 }
 p.docx_style16 span {
   font-family: 'Liberation Serif', NSimSun;
@@ -62,6 +86,11 @@ p.docx_style17 {
   margin-top: 6.00pt;
   margin-bottom: 6.00pt;
 }
+p.docx_style17 {
+  font-style: italic;
+  font-size: 12.00pt;
+  font-family: 'Liberation Serif', NSimSun;
+}
 p.docx_style17 span {
   font-style: italic;
   min-height: 12.00pt;
@@ -70,6 +99,10 @@ p.docx_style17 span {
   color: black;
 }
 p.docx_style18 {
+}
+p.docx_style18 {
+  font-family: 'Liberation Serif', NSimSun;
+  font-size: 12.00pt;
 }
 p.docx_style18 span {
   font-family: 'Liberation Serif', NSimSun;
