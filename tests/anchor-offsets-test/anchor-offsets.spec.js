@@ -22,6 +22,10 @@
       `</pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>`;
     const hiddenSquare = avatar.replace("<wp:wrapNone/>", '<wp:wrapSquare wrapText="bothSides"/>').replace('<wp:docPr id="1" name="" descr=""/>', '<wp:docPr id="1" name="" descr="" hidden="1"/>');
     const noExtent = avatar.replace(/<wp:extent[^>]*\/>/, "");
+    const inCell = avatar.replace('<wp:positionH relativeFrom="page">', '<wp:positionH relativeFrom="column">').replace(`${45.36 * EMU}</wp:posOffset></wp:positionH>`, `${10 * EMU}</wp:posOffset></wp:positionH>`);
+    const cellTable = '<w:tbl><w:tblGrid><w:gridCol w:w="4513"/><w:gridCol w:w="4513"/></w:tblGrid><w:tr>' +
+      '<w:tc><w:tcPr><w:tcW w:w="4513" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>left cell</w:t></w:r></w:p></w:tc>' +
+      `<w:tc><w:tcPr><w:tcW w:w="4513" w:type="dxa"/></w:tcPr><w:p>${inCell}</w:p></w:tc></w:tr></w:tbl>`;
     const block = (id, picture = avatar) => `<w:p><w:pPr><w:spacing w:line="300"/></w:pPr>${picture}<w:r><w:rPr><w:b/></w:rPr><w:br/><w:t xml:space="preserve">${id} </w:t></w:r>` +
       `<w:r><w:t>Body line under the heading</w:t></w:r></w:p>`;
 
@@ -45,7 +49,7 @@
       zip.file("word/media/avatar.png", PNG, { base64: true });
       zip.file("word/document.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document ${NS}><w:body>
-${block("first")}${block("second")}${block("third", noExtent)}${block("fourth", hiddenSquare)}
+${block("first")}${block("second")}${block("third", noExtent)}${block("fourth", hiddenSquare)}${cellTable}
 <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>
 </w:body></w:document>`);
       return zip.generateAsync({ type: "blob" });
@@ -83,6 +87,11 @@ ${block("first")}${block("second")}${block("third", noExtent)}${block("fourth", 
     const rect = element => element.getBoundingClientRect();
     const paragraph = id => Array.from(container.querySelectorAll("article p")).find(p => p.textContent.startsWith(`${id} `));
     const expectNear = (actual, expected, tolerance = 1) => expect(Math.abs(actual - expected)).withContext(`${actual} vs ${expected}`).toBeLessThanOrEqual(tolerance);
+
+    it("places a column-relative no-wrap picture in a table cell from the cell", () => {
+      const cell = container.querySelectorAll("article td")[1];
+      expectNear(rect(cell.querySelector("img")).left - rect(cell.querySelector("p")).left, 10 * 4 / 3);
+    });
 
     it("places a page-relative no-wrap picture in the left margin, beside the text", () => {
       const page = rect(container.querySelector("section.anchor-offsets"));
