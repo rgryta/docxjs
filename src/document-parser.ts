@@ -864,6 +864,11 @@ export class DocumentParser {
 	parseDrawingWrapper(node: Element): OpenXmlElement {
 		var result = <OpenXmlElement>{ type: DomType.Drawing, children: [], cssStyle: {} };
 		var isAnchor = node.localName == "anchor";
+		const docPr = xml.element(node, "docPr");
+
+		// a drawing the author hid in Word's selection pane is not shown, whatever its wrapping
+		if (docPr && xml.boolAttr(docPr, "hidden", false))
+			return null;
 
 		//TODO
 		// result.style["margin-left"] = xml.sizeAttr(node, "distL", SizeType.Emu);
@@ -873,39 +878,21 @@ export class DocumentParser {
 
 		let wrapType: "wrapTopAndBottom" | "wrapNone" | null = null;
 		let simplePos = xml.boolAttr(node, "simplePos");
-		let behindDoc = xml.boolAttr(node, "behindDoc");
-
-		let posX = { relative: "page", align: "left", offset: "0" };
-		let posY = { relative: "page", align: "top", offset: "0" };
+		let align = "left";
 
 		for (var n of xml.elements(node)) {
 			switch (n.localName) {
-				case "simplePos":
-					if (simplePos) {
-						posX.offset = xml.lengthAttr(n, "x", LengthUsage.Emu);
-						posY.offset = xml.lengthAttr(n, "y", LengthUsage.Emu);
-					}
-					break;
-
 				case "extent":
 					result.cssStyle["width"] = xml.lengthAttr(n, "cx", LengthUsage.Emu);
 					result.cssStyle["height"] = xml.lengthAttr(n, "cy", LengthUsage.Emu);
 					break;
 
 				case "positionH":
-				case "positionV":
 					if (!simplePos) {
-						let pos = n.localName == "positionH" ? posX : posY;
 						var alignNode = xml.element(n, "align");
-						var offsetNode = xml.element(n, "posOffset");
-
-						pos.relative = xml.attr(n, "relativeFrom") ?? pos.relative;
 
 						if (alignNode)
-							pos.align = alignNode.textContent;
-
-						if (offsetNode)
-							pos.offset = convertLength(offsetNode.textContent, LengthUsage.Emu);
+							align = alignNode.textContent;
 					}
 					break;
 
@@ -926,30 +913,19 @@ export class DocumentParser {
 			}
 		}
 
-		if (g?.type == DomType.Shape || g?.type == DomType.Group)
+		if (g?.type == DomType.Shape || g?.type == DomType.Group || (isAnchor && wrapType == "wrapNone" && g?.type == DomType.Image))
 			return parseShapeDrawing(node, g, this.drawingDepth > 0);
 
 		if (wrapType == "wrapTopAndBottom") {
 			result.cssStyle['display'] = 'block';
 
-			if (posX.align) {
-				result.cssStyle['text-align'] = posX.align;
+			if (align) {
+				result.cssStyle['text-align'] = align;
 				result.cssStyle['width'] = "100%";
 			}
 		}
-		else if (wrapType == "wrapNone") {
-			result.cssStyle['display'] = 'block';
-			result.cssStyle['position'] = 'relative';
-			result.cssStyle["width"] = "0px";
-			result.cssStyle["height"] = "0px";
-
-			if (posX.offset)
-				result.cssStyle["left"] = posX.offset;
-			if (posY.offset)
-				result.cssStyle["top"] = posY.offset;
-		}
-		else if (isAnchor && (posX.align == 'left' || posX.align == 'right')) {
-			result.cssStyle["float"] = posX.align;
+		else if (isAnchor && (align == 'left' || align == 'right')) {
+			result.cssStyle["float"] = align;
 		}
 
 		return result;
