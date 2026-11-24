@@ -90,8 +90,7 @@ export function isDrawableShape(wsp: Element): boolean {
 		&& ["gradFill", "pattFill", "blipFill"].every(name => !descendant(spPr, name).length)
 		&& !xml.element(wsp, "linkedTxbx")
 		&& (!bodyPr || (xml.attr(bodyPr, "vert") ?? "horz") == "horz" && !xml.boolAttr(bodyPr, "fromWordArt", false))
-		&& (!warp || xml.attr(warp, "prst") == "textNoShape")
-		&& (prst != "line" || ["headEnd", "tailEnd"].every(name => descendant(spPr, name).every(end => (xml.attr(end, "type") ?? "none") == "none")));
+		&& (!warp || xml.attr(warp, "prst") == "textNoShape");
 }
 
 export function canDrawChoice(choice: Element): boolean {

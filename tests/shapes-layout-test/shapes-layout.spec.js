@@ -97,6 +97,7 @@ describe("DrawingML shapes", function () {
     para("case-choice-wordart", run(alternate(`<mc:Choice Requires="wps">${inline(20, 10, shapeGraphic(wsp({
       bodyPr: '<wps:bodyPr><a:prstTxWarp prst="textArchUp"><a:avLst/></a:prstTxWarp></wps:bodyPr>',
     })))}</mc:Choice>`, ovalFallback))),
+    para("case-choice-arrow", run(alternate(`<mc:Choice Requires="wps">${inline(20, 10, shapeGraphic(wsp({ geom: "line", spPr: '<a:ln><a:tailEnd type="triangle"/></a:ln>' })))}</mc:Choice>`, ovalFallback))),
     para("case-marks",
       run(inline(20, 10, shapeGraphic(custGeom))),
       run(alternate(`<mc:Choice Requires="wps">${inline(20, 10, shapeGraphic(custGeom))}</mc:Choice>`)),
@@ -324,6 +325,7 @@ ${content}
     expect(branch("case-choice-local")).toBe("choice");
     expect(branch("case-choice-two")).toBe("fallback");
     expect(branch("case-choice-wordart")).toBe("fallback");
+    expect(paragraph("case-choice-arrow").querySelector("svg line")).not.toBeNull();
     expect(reasons(paragraph("case-choice-empty"))).toEqual([]);
   });
 
