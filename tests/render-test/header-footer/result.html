@@ -28,7 +28,7 @@ section.docx>footer { z-index: 1; }
   --docx-hlink-color: #0563C1;
   --docx-folHlink-color: #954F72;
 }
-</style><!--docxjs document styles--><style>.docx span {
+</style><!--docxjs document styles--><style>.docx {
   font-family: 'Liberation Serif', NSimSun;
 }
 .docx p {
@@ -40,7 +40,7 @@ section.docx>footer { z-index: 1; }
   min-height: 12.00pt;
   font-size: 12.00pt;
 }
-.docx table, table.docx_tablenormal td {
+:where(.docx) table td, table.docx_tablenormal td {
   padding-top: 0.00pt;
   padding-left: 5.40pt;
   padding-bottom: 0.00pt;
