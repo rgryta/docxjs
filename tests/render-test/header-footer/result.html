@@ -28,10 +28,10 @@ section.docx>header, section.docx>footer { z-index: 0; }
   --docx-hlink-color: #0563C1;
   --docx-folHlink-color: #954F72;
 }
-</style><!--docxjs document styles--><style>:where(.docx) {
+</style><!--docxjs document styles--><style>.docx {
   font-family: 'Liberation Serif', NSimSun;
 }
-:where(.docx) span {
+.docx {
   font-family: 'Liberation Serif', NSimSun;
 }
 .docx p {
@@ -39,10 +39,10 @@ section.docx>header, section.docx>footer { z-index: 0; }
 }
 .docx p, p.docx_normal {
 }
-.docx p, :where(.docx) p, p.docx_normal {
+.docx p, p.docx_normal {
   font-size: 12.00pt;
 }
-.docx p, :where(.docx) p span, p.docx_normal span {
+.docx p, p.docx_normal span {
   min-height: 12.00pt;
   font-size: 12.00pt;
 }

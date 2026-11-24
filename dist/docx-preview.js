@@ -107,9 +107,6 @@
     function clamp(val, min, max) {
         return min > val ? min : (max < val ? max : val);
     }
-    function strictInteger(text) {
-        return /^-?\d+$/.test(text?.trim() ?? "") ? parseInt(text) : NaN;
-    }
 
     const ns$1 = {
         wordml: "http://schemas.openxmlformats.org/wordprocessingml/2006/main"};
@@ -121,13 +118,12 @@
         Point: { mul: 1, unit: "pt" },
         Percent: { mul: 0.02, unit: "%" }};
     const pointsPerUnit = { mm: 72 / 25.4, cm: 72 / 2.54, in: 72, pc: 12, pi: 12 };
-    const universalMeasure = /^(-?(?:\d+\.?\d*|\.\d+))(mm|cm|in|pc|pi)$/;
     function convertLength(val, usage = LengthUsage.Dxa) {
         if (val == null || /.+(p[xt]|[%])$/.test(val)) {
             return val;
         }
-        const measure = usage.unit == "pt" ? universalMeasure.exec(val) : null;
-        var num = measure ? parseFloat(measure[1]) * pointsPerUnit[measure[2]] : parseInt(val) * usage.mul;
+        const k = usage.unit == "pt" && pointsPerUnit[val.slice(-2)];
+        var num = k ? parseFloat(val) * k : parseInt(val) * usage.mul;
         if (usage.min && usage.max)
             num = clamp(num, usage.min, usage.max);
         return `${num.toFixed(2)}${usage.unit}`;
@@ -1305,7 +1301,7 @@
         }
     }
     function groupFrame([ox, oy], [cw, ch], width, height, flipH, flipV) {
-        return [ox, oy, cw, ch, width, height].every(Number.isFinite) && cw > 0 && ch > 0 && width > 0 && height > 0
+        return [ox, oy, cw, ch, width, height].every(Number.isFinite) && Math.min(cw, ch, width, height) >= 0 && cw + ch > 0 && width + height > 0
             ? { ox, oy, cw, ch, width, height, flipH, flipV }
             : null;
     }
@@ -1314,15 +1310,19 @@
             return null;
         const left = frame.flipH ? frame.cw - (x - frame.ox) - w : x - frame.ox;
         const top = frame.flipV ? frame.ch - (y - frame.oy) - h : y - frame.oy;
-        const percents = [left / frame.cw, top / frame.ch, w / frame.cw, h / frame.ch].map(v => v * 100);
+        const [cw, ch] = [frame.cw || 1, frame.ch || 1];
+        const percents = [left / cw, top / ch, w / cw, h / ch].map(v => v * 100);
         if (!percents.every(v => Math.abs(v) <= maxPercent))
             return null;
         const [l, t, pw, ph] = percents.map(v => `${v.toFixed(4)}%`);
         return {
             place: { left: l, top: t, width: pw, height: ph, rotation: frame.flipH != frame.flipV ? -rotation : rotation },
-            width: w / frame.cw * frame.width,
-            height: h / frame.ch * frame.height,
+            width: w / cw * frame.width,
+            height: h / ch * frame.height,
         };
+    }
+    function strictInteger(text) {
+        return /^-?\d+$/.test(text?.trim() ?? "") ? parseInt(text) : NaN;
     }
     function integerPair(text, fallback) {
         const parts = text.split(",");
@@ -1331,23 +1331,22 @@
             return !part ? value : strictInteger(part);
         });
     }
-    function arrowBase(tip, from, strokeWidth, lengthScale) {
-        const [tx, ty] = tip.map(v => v * pxPerPt);
-        const [fx, fy] = from.map(v => v * pxPerPt);
-        const distance = Math.hypot(tx - fx, ty - fy) || 1;
-        const length = lengthScale * strokeWidth * pxPerPt;
-        return [tx - (tx - fx) / distance * length, ty - (ty - fy) / distance * length];
-    }
     function arrowHead(tip, from, strokeWidth, widthScale, lengthScale) {
         const [tx, ty] = tip.map(v => v * pxPerPt);
         const [fx, fy] = from.map(v => v * pxPerPt);
         const distance = Math.hypot(tx - fx, ty - fy) || 1;
         const [ux, uy] = [(tx - fx) / distance, (ty - fy) / distance];
+        const length = lengthScale * strokeWidth * pxPerPt;
         const half = widthScale * strokeWidth * pxPerPt / 2;
-        const [bx, by] = arrowBase(tip, from, strokeWidth, lengthScale);
-        const f = (v) => `${parseFloat(v.toFixed(2))}`;
-        return `M ${f(tx)} ${f(ty)} L ${f(bx - uy * half)} ${f(by + ux * half)} L ${f(bx + uy * half)} ${f(by - ux * half)} Z`;
+        const [bx, by] = [tx - ux * length, ty - uy * length];
+        return { d: `M ${f(tx)} ${f(ty)} L ${f(bx - uy * half)} ${f(by + ux * half)} L ${f(bx + uy * half)} ${f(by - ux * half)} Z`, base: [bx, by] };
     }
+    function addArrowHead(parts, line, ends, i, strokeWidth, widthScale, lengthScale, attrs) {
+        const { d, base: [bx, by] } = arrowHead(ends[i], ends[1 - i], strokeWidth, widthScale, lengthScale);
+        Object.assign(line, i ? { x2: f(bx), y2: f(by) } : { x1: f(bx), y1: f(by) });
+        parts.push({ tagName: "path", attrs: { d, ...attrs } });
+    }
+    const f = (v) => `${parseFloat(v.toFixed(2))}`;
 
     const vmlNamespace = "urn:schemas-microsoft-com:vml";
     const modifierTags = new Set(["stroke", "fill", "path", "formulas", "f", "handles", "h", "shadow", "textbox",
@@ -1359,7 +1358,7 @@
             this.parts = [];
         }
     }
-    function parseVmlElement(elem, parser, watermarkAllowed = false, frame = null) {
+    function parseVmlElement(elem, parser, frame = null) {
         if (elem.namespaceURI != vmlNamespace)
             return null;
         if (elem.localName == "shapetype") {
@@ -1390,7 +1389,6 @@
         const result = new VmlElement();
         let stroke = null, fill = null, textBox = null, imageData = null;
         let hasTextPath = false;
-        const innerMarks = [];
         for (const el of globalXmlParser.elements(elem)) {
             switch (el.localName) {
                 case "stroke":
@@ -1411,14 +1409,10 @@
                 case "wrap":
                     result.wrapType = globalXmlParser.attr(el, "type");
                     break;
-                default:
-                    if (el.namespaceURI == vmlNamespace && !modifierTags.has(el.localName))
-                        innerMarks.push(markPart("vml-element"));
-                    break;
             }
         }
         if (hasTextPath)
-            return notDrawn(watermarkAllowed && elem.localName == "shape" ? "watermark" : "vml-element");
+            return notDrawn("vml-element");
         const style = parseVmlStyle(globalXmlParser.attr(elem, "style"));
         result.box = parseBox(style);
         if (frame) {
@@ -1468,16 +1462,12 @@
                     else if (!textBox) {
                         return notDrawn(pathText ? "vml-path" : "vml-shape");
                     }
-                    else if (pathText) {
-                        innerMarks.push(markPart("vml-path"));
-                    }
                     break;
                 }
             }
         }
         if (elem.localName != "line" && arrowTypes(stroke).some(type => type != "none"))
-            innerMarks.push(markPart("partial"));
-        result.parts.push(...innerMarks);
+            result.parts.push(markPart("partial"));
         const flip = style.get("flip") ?? "";
         const flipX = flip.includes("x") != !!frame?.flipH;
         const flipY = flip.includes("y") != !!frame?.flipV;
@@ -1486,10 +1476,7 @@
         if (textBox) {
             result.textBox = parseTextBox(textBox, style.get("v-text-anchor"));
             const content = globalXmlParser.element(textBox, "txbxContent");
-            const children = content ? parser.parseTextBoxContent(content) : [];
-            if (!children)
-                return notDrawn("depth");
-            result.children.push(...children);
+            content && result.children.push(...parser.parseTextBoxContent(content));
         }
         return result;
     }
@@ -1505,9 +1492,7 @@
         const childFrame = groupFrame(integerPair(globalXmlParser.attr(elem, "coordorigin") ?? "", [0, 0]), integerPair(globalXmlParser.attr(elem, "coordsize") ?? "", [1000, 1000]), width, height, flip.includes("x") != !!frame?.flipH, flip.includes("y") != !!frame?.flipV);
         if (!childFrame || frame && !mapped)
             return notDrawn("group-child");
-        const children = parser.nested(() => globalXmlParser.elements(elem).map(child => parseVmlElement(child, parser, false, childFrame)).filter(Boolean));
-        if (!children)
-            return notDrawn("depth");
+        const children = parser.nested(() => globalXmlParser.elements(elem).map(child => parseVmlElement(child, parser, childFrame)).filter(Boolean));
         const group = new DrawingGroup();
         group.width = width;
         group.height = height;
@@ -1542,17 +1527,18 @@
     function lineHeads(stroke, line, box, paint) {
         const corner = (x, y) => [x == "0" ? 0 : box.width, y == "0" ? 0 : box.height];
         const ends = [corner(line.x1, line.y1), corner(line.x2, line.y2)];
-        return arrowTypes(stroke).flatMap((type, i) => {
+        const parts = [];
+        arrowTypes(stroke).forEach((type, i) => {
             if (type == "none" || !paint.stroke)
-                return [];
-            if (!drawnArrows.has(type))
-                return [markPart("partial")];
+                return;
+            if (!drawnArrows.has(type)) {
+                parts.push(markPart("partial"));
+                return;
+            }
             const scale = (name) => arrowScale[(globalXmlParser.attr(stroke, `${["start", "end"][i]}arrow${name}`) ?? "").trim().toLowerCase()] ?? 3;
-            const d = arrowHead(ends[i], ends[1 - i], paint.strokeWidth, scale("width"), scale("length"));
-            const [bx, by] = arrowBase(ends[i], ends[1 - i], paint.strokeWidth, scale("length"));
-            Object.assign(line, i ? { x2: formatNumber(bx), y2: formatNumber(by) } : { x1: formatNumber(bx), y1: formatNumber(by) });
-            return [{ tagName: "path", attrs: { d, fill: paint.stroke, stroke: "none" } }];
+            addArrowHead(parts, line, ends, i, paint.strokeWidth, scale("width"), scale("length"), { fill: paint.stroke, stroke: "none" });
         });
+        return parts;
     }
     function notDrawn(reason) {
         const result = new VmlElement();
@@ -1572,24 +1558,6 @@
         return result;
     }
     const lengthPattern = /^[+-]?(\d+\.?\d*|\.\d+)(pt|px|in|cm|mm|pc|pi)?$/;
-    const styleRules = new Map([
-        ["position", /^(absolute|relative|static)$/],
-        ["left", lengthPattern],
-        ["top", lengthPattern],
-        ["margin-left", lengthPattern],
-        ["margin-top", lengthPattern],
-        ["width", lengthPattern],
-        ["height", lengthPattern],
-        ["z-index", /^-?\d{1,10}$/],
-        ["rotation", /^-?\d+(\.\d+)?$/],
-        ["flip", /^(x|y|x y|y x)$/],
-        ["visibility", /^(hidden|visible|inherit)$/],
-        ["mso-position-horizontal", /^(absolute|left|center|right|inside|outside|top|bottom)$/],
-        ["mso-position-vertical", /^(absolute|left|center|right|inside|outside|top|bottom)$/],
-        ["mso-position-horizontal-relative", /^(page|margin|text|char|(left|right|inner|outer)-margin-area)$/],
-        ["mso-position-vertical-relative", /^(page|margin|text|line|(top|bottom|inner|outer)-margin-area)$/],
-        ["v-text-anchor", /^(top|middle|bottom)(-center|-baseline|-center-baseline)?$/],
-    ]);
     function parseVmlStyle(text) {
         const result = new Map();
         for (const item of (text ?? "").split(";")) {
@@ -1597,10 +1565,8 @@
             if (colon > 0)
                 result.set(item.substring(0, colon).trim().toLowerCase(), item.substring(colon + 1).trim().toLowerCase());
         }
-        for (const [key, value] of result) {
-            if (!styleRules.get(key)?.test(value))
-                result.delete(key);
-        }
+        if (result.has("flip") && !/^(x|y|x y|y x)$/.test(result.get("flip")))
+            result.delete("flip");
         return result;
     }
     function lengthPoints(value, unitlessAsPixels = false) {
@@ -1671,15 +1637,12 @@
         return clamp(size, 0, 0.5);
     }
     function parseViewBox(coordsize, coordorigin) {
-        const integer = (part) => {
-            const value = strictInteger(part);
-            return Number.isNaN(value) ? null : value;
-        };
+        const integer = (part) => /^-?\d+$/.test(part?.trim() ?? "") ? parseInt(part) : null;
         const size = (coordsize ?? "1000,1000").split(",").map(integer);
         const origin = (coordorigin ?? "").split(",").map(integer);
         return [origin[0] ?? 0, origin[1] ?? 0, size[0] > 0 ? size[0] : 1, size[1] > 0 ? size[1] : 1].join(" ");
     }
-    const textAnchor$1 = { top: "flex-start", middle: "center", bottom: "flex-end" };
+    const textAnchor$1 = new Map([["top", "flex-start"], ["middle", "center"], ["bottom", "flex-end"]]);
     const defaultInset = ["7.2pt", "3.6pt", "7.2pt", "3.6pt"];
     function parseTextBox(elem, anchor) {
         const parts = (globalXmlParser.attr(elem, "inset") ?? "").split(",");
@@ -1689,7 +1652,7 @@
         });
         return {
             padding: [top, right, bottom, left],
-            justify: textAnchor$1[anchor?.split("-")[0]] ?? "flex-start",
+            justify: textAnchor$1.get(anchor?.split("-")[0]) ?? "flex-start",
         };
     }
     const trueValues = new Set(["t", "true", "1", "yes", "on"]);
@@ -1789,12 +1752,9 @@
     const svgCommands = {
         m: ["M", "L"], t: ["m", "l"], l: ["L", "L"], r: ["l", "l"], c: ["C", "C"], v: ["c", "c"]
     };
-    const maxPathTokens = 10000;
-    const maxPathValue = 2 ** 31;
     function parseVmlPath(text) {
         const segments = [];
         const token = /(-?\d+)|(,)|(\s+)/y;
-        let tokens = 0;
         let afterComma = false;
         let started = false;
         const endSegment = () => {
@@ -1805,8 +1765,6 @@
             started = false;
         };
         for (let i = 0; i < text.length;) {
-            if (++tokens > maxPathTokens)
-                return null;
             const command = pathCommands.find(c => text.startsWith(c, i));
             if (command) {
                 endSegment();
@@ -1821,10 +1779,7 @@
             i = token.lastIndex;
             const values = segments[segments.length - 1]?.values;
             if (match[1]) {
-                const value = parseInt(match[1]);
-                if (Math.abs(value) > maxPathValue)
-                    return null;
-                values.push(value);
+                values.push(parseInt(match[1]));
                 afterComma = false;
                 started = true;
             }
@@ -1833,9 +1788,6 @@
                     values.push(0);
                 afterComma = true;
                 started = true;
-            }
-            else {
-                tokens--;
             }
         }
         endSegment();
@@ -1888,7 +1840,6 @@
     const groupNamespace = "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup";
     const drawnPresets = new Set(["rect", "roundRect", "ellipse", "line"]);
     const groupProps = new Set(["cNvPr", "cNvGrpSpPr", "nvGrpSpPr", "grpSpPr", "extLst"]);
-    const maxDepth = 16;
     const maxEmu = 1e12;
     class DmlShape extends OpenXmlElementBase {
         constructor() {
@@ -1915,8 +1866,7 @@
             && ["gradFill", "pattFill", "blipFill"].every(name => !descendant(spPr, name).length)
             && !globalXmlParser.element(wsp, "linkedTxbx")
             && (!bodyPr || (globalXmlParser.attr(bodyPr, "vert") ?? "horz") == "horz" && !globalXmlParser.boolAttr(bodyPr, "fromWordArt", false))
-            && (!warp || globalXmlParser.attr(warp, "prst") == "textNoShape")
-            && (prst != "line" || inGroup || ["headEnd", "tailEnd"].every(name => descendant(spPr, name).every(end => (globalXmlParser.attr(end, "type") ?? "none") == "none")));
+            && (!warp || globalXmlParser.attr(warp, "prst") == "textNoShape");
     }
     function canDrawChoice(choice) {
         const requires = globalXmlParser.attr(choice, "Requires");
@@ -1932,13 +1882,13 @@
         const graphicData = graphic && globalXmlParser.element(graphic, "graphicData");
         const shapes = graphicData ? globalXmlParser.elements(graphicData) : [];
         return shapes.length > 0 && shapes.every(s => s.namespaceURI == shapeNamespace && s.localName == "wsp" && isDrawableShape(s)
-            || s.namespaceURI == groupNamespace && s.localName == "wgp" && drawsGroup(s, 1));
+            || s.namespaceURI == groupNamespace && s.localName == "wgp" && drawsGroup(s));
     }
-    function drawsGroup(group, depth) {
-        return depth <= maxDepth && globalXmlParser.elements(group).every(child => groupProps.has(child.localName)
+    function drawsGroup(group) {
+        return globalXmlParser.elements(group).every(child => groupProps.has(child.localName)
             || child.localName == "wsp" && isDrawableShape(child, true)
             || child.localName == "pic"
-            || child.localName == "grpSp" && drawsGroup(child, depth + 1));
+            || child.localName == "grpSp" && drawsGroup(child));
     }
     function parseShape(wsp, parser) {
         const spPr = globalXmlParser.element(wsp, "spPr");
@@ -1967,10 +1917,7 @@
         result.headEnd = parseLineEnd(ln, "headEnd");
         result.tailEnd = parseLineEnd(ln, "tailEnd");
         if (content) {
-            const children = parser.parseTextBoxContent(content);
-            if (!children)
-                return notDrawn("depth");
-            result.children = children;
+            result.children = parser.parseTextBoxContent(content);
             result.textBox = parseBodyProps(bodyPr);
         }
         return result;
@@ -1994,7 +1941,7 @@
         };
     }
     const colorAttrs = {
-        srgbClr: ["val"], schemeClr: ["val"], sysClr: ["lastClr"], prstClr: ["val"], scrgbClr: ["r", "g", "b"], hslClr: ["hue", "sat", "lum"],
+        srgbClr: ["val"], schemeClr: ["val"], sysClr: ["lastClr"],
     };
     function parseColor(parent) {
         const el = globalXmlParser.elements(parent).find(e => Object.prototype.hasOwnProperty.call(colorAttrs, e.localName));
@@ -2061,8 +2008,6 @@
             .filter(child => !groupProps.has(child.localName))
             .map(child => parseGroupChild(child, parser, frame))
             .filter(child => child != null));
-        if (!children)
-            return notDrawn("depth");
         const result = new DrawingGroup();
         result.width = width;
         result.height = height;
@@ -2108,16 +2053,14 @@
     const hex6 = /^[0-9A-Fa-f]{6}$/;
     const schemeAliases = new Map([["bg1", "lt1"], ["tx1", "dk1"], ["bg2", "lt2"], ["tx2", "dk2"]]);
     const modifiers = new Set(["lumMod", "lumOff", "satMod", "shade", "tint", "alpha"]);
-    function resolveColor(spec, theme, placeholder = null) {
-        const color = spec.kind == "schemeClr" && spec.values[0] == "phClr"
-            ? placeholder && { ...placeholder }
-            : baseColor(spec, theme);
+    function resolveColor(spec, theme) {
+        const color = baseColor(spec, theme);
         if (!color)
             return null;
         for (const [name, value] of spec.mods) {
             if (!modifiers.has(name))
                 continue;
-            if (!/^-?\d+$/.test(value ?? "") || name != "alpha" && !color.rgb)
+            if (!/^-?\d+$/.test(value ?? ""))
                 return null;
             const amount = parseInt(value) / 100000;
             if (name == "alpha")
@@ -2129,23 +2072,12 @@
     }
     function baseColor(spec, theme) {
         const [first] = spec.values;
-        const numbers = spec.values.map(integer);
         switch (spec.kind) {
             case "srgbClr":
             case "sysClr":
                 return rgbColor(hexRgb(first));
             case "schemeClr":
                 return rgbColor(hexRgb(theme?.colorScheme?.colors[schemeAliases.get(first) ?? first]));
-            case "prstClr": {
-                const name = first?.toLowerCase().replace(/^dk/, "dark").replace(/^lt/, "light").replace(/^med/, "medium");
-                return namedColors.has(name) ? { name, alpha: 1 } : null;
-            }
-            case "scrgbClr":
-                return numbers.every(n => n != null) ? rgbColor(numbers.map(n => toGamma(clamp(n / 100000, 0, 1)))) : null;
-            case "hslClr":
-                return numbers.every(n => n != null)
-                    ? rgbColor(fromHsl([(numbers[0] / 21600000 % 1 + 1) % 1, clamp(numbers[1] / 100000, 0, 1), clamp(numbers[2] / 100000, 0, 1)]))
-                    : null;
         }
         return null;
     }
@@ -2156,7 +2088,7 @@
         return typeof value == "string" && hex6.test(value) ? [0, 2, 4].map(i => parseInt(value.substring(i, i + 2), 16) / 255) : null;
     }
     function formatColor(color) {
-        return color.name ?? `#${color.rgb.map(c => Math.round(clamp(c, 0, 1) * 255).toString(16).padStart(2, "0")).join("")}`;
+        return `#${color.rgb.map(c => Math.round(clamp(c, 0, 1) * 255).toString(16).padStart(2, "0")).join("")}`;
     }
     function modify(rgb, name, amount) {
         if (name == "shade")
@@ -2307,8 +2239,6 @@
             return this.nested(() => this.parseBodyElements(element));
         }
         nested(parse) {
-            if (this.drawingDepth >= 16)
-                return null;
             this.drawingDepth++;
             try {
                 return parse();
@@ -2826,7 +2756,7 @@
                             result.children.push(d);
                         break;
                     case "pict":
-                        result.children.push(this.parseVmlPicture(c, c === child));
+                        result.children.push(this.parseVmlPicture(c));
                         break;
                     case "rPr":
                         this.parseRunProperties(c, result);
@@ -2897,10 +2827,10 @@
                 return true;
             });
         }
-        parseVmlPicture(elem, watermarkAllowed = false) {
+        parseVmlPicture(elem) {
             const result = { type: DomType.VmlPicture, children: [] };
             for (const el of globalXmlParser.elements(elem)) {
-                const child = parseVmlElement(el, this, watermarkAllowed);
+                const child = parseVmlElement(el, this);
                 child && result.children.push(child);
             }
             return result;
@@ -2909,9 +2839,13 @@
             if (elem.localName != 'AlternateContent')
                 return elem;
             const choice = globalXmlParser.element(elem, "Choice");
-            if (choice && canDrawChoice(choice))
+            const fallback = globalXmlParser.element(elem, "Fallback");
+            if (choice && canDrawChoice(choice)) {
+                for (const shapeType of fallback ? Array.from(fallback.getElementsByTagNameNS("*", "shapetype")) : [])
+                    parseVmlElement(shapeType, this);
                 return choice.firstElementChild;
-            return globalXmlParser.element(elem, "Fallback")?.firstElementChild;
+            }
+            return fallback?.firstElementChild;
         }
         parseDrawing(node) {
             for (var n of globalXmlParser.elements(node)) {
@@ -2930,8 +2864,7 @@
                 return null;
             let wrapType = null;
             let simplePos = globalXmlParser.boolAttr(node, "simplePos");
-            globalXmlParser.boolAttr(node, "behindDoc");
-            let posX = { align: "left" };
+            let align = "left";
             for (var n of globalXmlParser.elements(node)) {
                 switch (n.localName) {
                     case "extent":
@@ -2942,7 +2875,7 @@
                         if (!simplePos) {
                             var alignNode = globalXmlParser.element(n, "align");
                             if (alignNode)
-                                posX.align = alignNode.textContent;
+                                align = alignNode.textContent;
                         }
                         break;
                     case "wrapTopAndBottom":
@@ -2962,13 +2895,13 @@
                 return parseShapeDrawing(node, g, this.drawingDepth > 0);
             if (wrapType == "wrapTopAndBottom") {
                 result.cssStyle['display'] = 'block';
-                if (posX.align) {
-                    result.cssStyle['text-align'] = posX.align;
+                if (align) {
+                    result.cssStyle['text-align'] = align;
                     result.cssStyle['width'] = "100%";
                 }
             }
-            else if (isAnchor && (posX.align == 'left' || posX.align == 'right')) {
-                result.cssStyle["float"] = posX.align;
+            else if (isAnchor && (align == 'left' || align == 'right')) {
+                result.cssStyle["float"] = align;
             }
             return result;
         }
@@ -3416,14 +3349,13 @@
                 style["margin-bottom"] = after;
             if (line) {
                 style["--docx-run-line-height"] = lineRule == "atLeast" ? "normal" : "initial";
-                if (lineRule == "auto") {
-                    const multiple = Number(line) / 240;
-                    if (multiple >= 0.005)
-                        style["line-height"] = multiple.toFixed(2);
-                }
-                else {
-                    const length = convertLength(line, LengthUsage.Dxa);
-                    style["line-height"] = style["min-height"] = length;
+                switch (lineRule) {
+                    case "auto":
+                        style["line-height"] = `${(Number(line) / 240).toFixed(2)}`;
+                        break;
+                    default:
+                        style["line-height"] = style["min-height"] = convertLength(line, LengthUsage.Dxa);
+                        break;
                 }
             }
         }
@@ -4152,8 +4084,8 @@
                         style.minHeight = props.pageSize.height;
                 }
                 const pageVariables = {
-                    "--docx-page-width": props.pageSize?.width,
-                    "--docx-page-height": props.pageSize?.height,
+                    "--docx-page-width": this.options.ignoreWidth ? null : props.pageSize?.width,
+                    "--docx-page-height": this.options.ignoreHeight ? null : props.pageSize?.height,
                     "--docx-margin-left": props.pageMargins?.left,
                     "--docx-margin-right": props.pageMargins?.right,
                     "--docx-margin-top": props.pageMargins?.top,
@@ -4188,7 +4120,7 @@
                 let props = section.sectProps;
                 const pageElement = this.createPageElement(this.className, props, document.cssStyle);
                 const pageNumber = props?.pageNumber;
-                if (pageNumber?.start != null && prevProps != props && props.type != SectionType.Continuous && props.type != SectionType.NextColumn)
+                if (pageNumber?.start != null && prevProps != props && (!prevProps || props.type != SectionType.Continuous && props.type != SectionType.NextColumn))
                     pageElement.setAttribute("data-page-start", String(pageNumber.start));
                 if (pageNumber?.chapStyle || pageNumber?.format && pageNumber.format != "decimal")
                     pageElement.setAttribute("data-page-format", pageNumber.chapStyle ? "other" : pageNumber.format);
@@ -4355,6 +4287,9 @@
                                 breakRun.children = runChildren.slice(rBreakIndex);
                             }
                         }
+                        else if (elem === elements[elements.length - 1]) {
+                            current.elements.push({ ...elem, children: [] });
+                        }
                     }
                 }
             }
@@ -4398,9 +4333,11 @@
             if (this.options.hideWrapperOnPrint) {
                 wrapperStyle = `@media not print { ${wrapperStyle} }`;
             }
+            const fontSize = styles?.some(s => (s.id == null || (s.isDefault && s.target == "p"))
+                && s.styles.some(x => x.target == "span" && x.values["font-size"])) ? "" : " font-size: 10pt;";
             var styleText = `${wrapperStyle}
 .${c} { color: black; hyphens: ${this.document.settingsPart?.settings?.autoHyphenation ? "auto" : "manual"}; text-underline-position: from-font; }
-section.${c} { box-sizing: border-box; display: flex; flex-flow: column nowrap; position: relative; overflow: hidden; }
+section.${c} { box-sizing: border-box; display: flex; flex-flow: column nowrap; position: relative; overflow: hidden;${fontSize} }
 section.${c}>article { margin-bottom: auto; z-index: 1; }
 section.${c}>header, section.${c}>footer { z-index: 0; }
 .${c} table { border-collapse: collapse; }
@@ -4411,10 +4348,6 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
 .${c} a { color: inherit; text-decoration: inherit; }
 .${c} svg { fill: transparent; }
 `;
-            const setsFontSize = styles?.some(s => (s.id == null || (s.isDefault && s.target == "p"))
-                && s.styles.some(x => x.target == "span" && x.values["font-size"]));
-            if (!setsFontSize)
-                styleText += `section.${c} { font-size: 10pt; }\n`;
             if (this.options.renderComments) {
                 styleText += `
 .${c}-comment-ref { cursor: default; }
@@ -4500,15 +4433,13 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
                 }
                 for (const subStyle of subStyles) {
                     var selector = `${style.target ?? ''}.${style.cssName}`;
-                    const subTarget = style.target != subStyle.target ? ` ${subStyle.target}` : '';
-                    if (style.target == null && subStyle.target != "p")
-                        selector = `:where(${selector})`;
-                    selector += subTarget;
-                    if (defautStyles[style.target] == style) {
-                        const own = !subTarget || style.target == "p" ? `.${this.className} ${style.target}, ` : "";
-                        const sub = subTarget ? `:where(.${this.className}) ${style.target}${subTarget}, ` : "";
-                        selector = own + sub + selector;
-                    }
+                    const isRunDefaults = style.target == null && style.id == null && subStyle.target == "span";
+                    if (style.target != subStyle.target && !isRunDefaults)
+                        selector += ` ${subStyle.target}`;
+                    if (defautStyles[style.target] == style)
+                        selector = (style.target != subStyle.target && style.target != "p"
+                            ? `:where(.${this.className}) ${style.target} ${subStyle.target}, `
+                            : `.${this.className} ${style.target}, `) + selector;
                     if (subStyle.target == "span" && (style.target == null || style.target == "p")) {
                         const font = Object.fromEntries(Object.entries(subStyle.values).filter(([key]) => ["font-family", "font-size", "font-weight", "font-style"].includes(key)));
                         const parentSelector = selector.split(", ").map(s => s.replace(/ span$/, "")).join(", ");
@@ -5020,7 +4951,7 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
                 const fromRef = spec === undefined && ref?.idx > 0 && !!ref.color;
                 if (spec === null || spec === undefined && !fromRef)
                     return null;
-                const color = fromRef ? refColor : resolveColor(spec, theme, refColor);
+                const color = fromRef ? refColor : resolveColor(spec, theme);
                 partial || (partial = !color);
                 return color;
             };
@@ -5059,13 +4990,10 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
                         partial = true;
                         return;
                     }
-                    const d = arrowHead(ends[i], ends[1 - i], paint.strokeWidth, headScale[end.width] ?? 3, headScale[end.length] ?? 3);
-                    const [bx, by] = arrowBase(ends[i], ends[1 - i], paint.strokeWidth, headScale[end.length] ?? 3);
-                    Object.assign(parts[0].attrs, i ? { x2: formatNumber(bx), y2: formatNumber(by) } : { x1: formatNumber(bx), y1: formatNumber(by) });
-                    const head = { d, fill: paint.stroke, stroke: "none" };
+                    const head = { fill: paint.stroke, stroke: "none" };
                     if (stroke.alpha < 1)
                         head["fill-opacity"] = formatNumber(stroke.alpha);
-                    parts.push({ tagName: "path", attrs: head });
+                    addArrowHead(parts, parts[0].attrs, ends, i, paint.strokeWidth, headScale[end.width] ?? 3, headScale[end.length] ?? 3, head);
                 });
             }
             if (partial)
@@ -5103,8 +5031,9 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
                 set("z-index", "-1");
             if (!floating)
                 return;
-            const left = anchorEdge(anchor.h, horizontalFrames, width);
-            const hStatic = staticOffset(anchor.h, horizontalFrames);
+            const h = this.currentCellPosition && anchor.h.relative == "column" ? { ...anchor.h, relative: undefined } : anchor.h;
+            const left = anchorEdge(h, horizontalFrames, width);
+            const hStatic = staticOffset(h, horizontalFrames);
             if (float) {
                 set("float", float.side);
                 set(float.side == "left" ? "margin-left" : "margin-right", pt(float.margin));
@@ -5170,7 +5099,8 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
             }
             else if (box.position == "absolute") {
                 set("position", "absolute");
-                const left = vmlEdge(vmlHorizontalFrames, box.hRelative ?? "text", box.hAlign, box.x, box.width);
+                const hRelative = box.hRelative ?? "text";
+                const left = this.currentCellPosition && hRelative == "text" ? null : vmlEdge(vmlHorizontalFrames, hRelative, box.hAlign, box.x, box.width);
                 const top = vmlEdge(vmlVerticalFrames, box.vRelative, box.vAlign, box.y, box.height);
                 if (left == null)
                     set("margin-left", pt(box.x));
@@ -5509,7 +5439,7 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
             (field.firstElementChild ?? field).appendChild(document.createTextNode(text));
         return field.textContent != before;
     }
-    function splitPage(page, className = "docx", nextNumber) {
+    function splitPage(page, className, nextNumber) {
         const children = Array.from(page.children);
         const articles = children.filter(c => c.tagName === "ARTICLE");
         if (!articles.length)
@@ -5548,6 +5478,8 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
             ...articles.flatMap(article => Array.from(article.children).map(block => ({ block, article }))),
             ...children.filter(c => c.tagName === "OL" && c !== footnotes).map(block => ({ block, article: null })),
         ];
+        if (!flow.length)
+            return null;
         const last = flow[flow.length - 1].block;
         const end = (block) => block.getBoundingClientRect().bottom + (block === last ? parseFloat(getComputedStyle(block).marginBottom) || 0 : 0);
         let over = flow.findIndex(f => !isBlank(f.block) && end(f.block) > (f.article ? notesLimit : limitY));
@@ -5653,8 +5585,8 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
             const shown = children.find(c => c.tagName === tag && getComputedStyle(c).display !== "none");
             const next = children.filter(c => c.tagName === tag && c.dataset.docxHf !== "first");
             const find = (type) => next.find(c => c.dataset.docxHf === type);
-            const pick = nextNumber == null ? null : (nextNumber % 2 == 0 ? find("even") : null) ?? find("default");
-            const height = pick ? shownHeight(pick) : next.length ? Math.min(...next.map(shownHeight)) : 0;
+            const pick = (nextNumber % 2 == 0 ? find("even") : null) ?? find("default");
+            const height = pick ? shownHeight(pick) : 0;
             saving += (shown ? outerHeight(shown) : 0) - height;
         }
         return saving;

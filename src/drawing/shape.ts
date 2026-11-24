@@ -2,15 +2,14 @@ import { DocumentParser } from '../document-parser';
 import { DomType, IDomImage, OpenXmlElement, OpenXmlElementBase } from '../document/dom';
 import xml from '../parser/xml-parser';
 import { DmlTheme } from '../theme/theme';
-import { clamp, strictInteger } from '../utils';
-import { formatNumber, namedColors, notDrawn, VmlTextBox } from '../vml/vml';
-import { DrawingGroup, GroupFrame, groupFrame, GroupPlace, placeChild } from './group';
+import { clamp } from '../utils';
+import { formatNumber, notDrawn, VmlTextBox } from '../vml/vml';
+import { DrawingGroup, GroupFrame, groupFrame, GroupPlace, placeChild, strictInteger } from './group';
 
 const shapeNamespace = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
 const groupNamespace = "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup";
 const drawnPresets = new Set(["rect", "roundRect", "ellipse", "line"]);
 const groupProps = new Set(["cNvPr", "cNvGrpSpPr", "nvGrpSpPr", "grpSpPr", "extLst"]);
-const maxDepth = 16;
 const maxEmu = 1e12;
 
 type Rgb = number[];
@@ -27,8 +26,7 @@ export interface DmlStyleRef {
 }
 
 export interface ResolvedColor {
-	rgb?: Rgb;
-	name?: string;
+	rgb: Rgb;
 	alpha: number;
 }
 
@@ -103,8 +101,7 @@ export function isDrawableShape(wsp: Element, inGroup = false): boolean {
 		&& ["gradFill", "pattFill", "blipFill"].every(name => !descendant(spPr, name).length)
 		&& !xml.element(wsp, "linkedTxbx")
 		&& (!bodyPr || (xml.attr(bodyPr, "vert") ?? "horz") == "horz" && !xml.boolAttr(bodyPr, "fromWordArt", false))
-		&& (!warp || xml.attr(warp, "prst") == "textNoShape")
-		&& (prst != "line" || inGroup || ["headEnd", "tailEnd"].every(name => descendant(spPr, name).every(end => (xml.attr(end, "type") ?? "none") == "none")));
+		&& (!warp || xml.attr(warp, "prst") == "textNoShape");
 }
 
 export function canDrawChoice(choice: Element): boolean {
@@ -125,14 +122,14 @@ function drawsShapes(drawing: Element): boolean {
 	const shapes = graphicData ? xml.elements(graphicData) : [];
 
 	return shapes.length > 0 && shapes.every(s => s.namespaceURI == shapeNamespace && s.localName == "wsp" && isDrawableShape(s)
-		|| s.namespaceURI == groupNamespace && s.localName == "wgp" && drawsGroup(s, 1));
+		|| s.namespaceURI == groupNamespace && s.localName == "wgp" && drawsGroup(s));
 }
 
-function drawsGroup(group: Element, depth: number): boolean {
-	return depth <= maxDepth && xml.elements(group).every(child => groupProps.has(child.localName)
+function drawsGroup(group: Element): boolean {
+	return xml.elements(group).every(child => groupProps.has(child.localName)
 		|| child.localName == "wsp" && isDrawableShape(child, true)
 		|| child.localName == "pic"
-		|| child.localName == "grpSp" && drawsGroup(child, depth + 1));
+		|| child.localName == "grpSp" && drawsGroup(child));
 }
 
 export function parseShape(wsp: Element, parser: DocumentParser): OpenXmlElement {
@@ -164,12 +161,7 @@ export function parseShape(wsp: Element, parser: DocumentParser): OpenXmlElement
 	result.tailEnd = parseLineEnd(ln, "tailEnd");
 
 	if (content) {
-		const children = parser.parseTextBoxContent(content);
-
-		if (!children)
-			return notDrawn("depth");
-
-		result.children = children;
+		result.children = parser.parseTextBoxContent(content);
 		result.textBox = parseBodyProps(bodyPr);
 	}
 
@@ -201,7 +193,7 @@ function parseBodyProps(bodyPr: Element): VmlTextBox {
 }
 
 const colorAttrs: Record<string, string[]> = {
-	srgbClr: ["val"], schemeClr: ["val"], sysClr: ["lastClr"], prstClr: ["val"], scrgbClr: ["r", "g", "b"], hslClr: ["hue", "sat", "lum"],
+	srgbClr: ["val"], schemeClr: ["val"], sysClr: ["lastClr"],
 };
 
 function parseColor(parent: Element): DmlColor {
@@ -284,9 +276,6 @@ function parseGroup(group: Element, parser: DocumentParser, width: number, heigh
 		.map(child => parseGroupChild(child, parser, frame))
 		.filter(child => child != null));
 
-	if (!children)
-		return notDrawn("depth");
-
 	const result = new DrawingGroup();
 	result.width = width;
 	result.height = height;
@@ -347,10 +336,8 @@ const hex6 = /^[0-9A-Fa-f]{6}$/;
 const schemeAliases = new Map([["bg1", "lt1"], ["tx1", "dk1"], ["bg2", "lt2"], ["tx2", "dk2"]]);
 const modifiers = new Set(["lumMod", "lumOff", "satMod", "shade", "tint", "alpha"]);
 
-export function resolveColor(spec: DmlColor, theme: DmlTheme, placeholder: ResolvedColor = null): ResolvedColor {
-	const color = spec.kind == "schemeClr" && spec.values[0] == "phClr"
-		? placeholder && { ...placeholder }
-		: baseColor(spec, theme);
+export function resolveColor(spec: DmlColor, theme: DmlTheme): ResolvedColor {
+	const color = baseColor(spec, theme);
 
 	if (!color)
 		return null;
@@ -359,7 +346,7 @@ export function resolveColor(spec: DmlColor, theme: DmlTheme, placeholder: Resol
 		if (!modifiers.has(name))
 			continue;
 
-		if (!/^-?\d+$/.test(value ?? "") || name != "alpha" && !color.rgb)
+		if (!/^-?\d+$/.test(value ?? ""))
 			return null;
 
 		const amount = parseInt(value) / 100000;
@@ -375,7 +362,6 @@ export function resolveColor(spec: DmlColor, theme: DmlTheme, placeholder: Resol
 
 function baseColor(spec: DmlColor, theme: DmlTheme): ResolvedColor {
 	const [first] = spec.values;
-	const numbers = spec.values.map(integer);
 
 	switch (spec.kind) {
 		case "srgbClr":
@@ -384,19 +370,6 @@ function baseColor(spec: DmlColor, theme: DmlTheme): ResolvedColor {
 
 		case "schemeClr":
 			return rgbColor(hexRgb(theme?.colorScheme?.colors[schemeAliases.get(first) ?? first]));
-
-		case "prstClr": {
-			const name = first?.toLowerCase().replace(/^dk/, "dark").replace(/^lt/, "light").replace(/^med/, "medium");
-			return namedColors.has(name) ? { name, alpha: 1 } : null;
-		}
-
-		case "scrgbClr":
-			return numbers.every(n => n != null) ? rgbColor(numbers.map(n => toGamma(clamp(n / 100000, 0, 1)))) : null;
-
-		case "hslClr":
-			return numbers.every(n => n != null)
-				? rgbColor(fromHsl([(numbers[0] / 21600000 % 1 + 1) % 1, clamp(numbers[1] / 100000, 0, 1), clamp(numbers[2] / 100000, 0, 1)]))
-				: null;
 	}
 
 	return null;
@@ -411,7 +384,7 @@ function hexRgb(value: unknown): Rgb {
 }
 
 export function formatColor(color: ResolvedColor): string {
-	return color.name ?? `#${color.rgb.map(c => Math.round(clamp(c, 0, 1) * 255).toString(16).padStart(2, "0")).join("")}`;
+	return `#${color.rgb.map(c => Math.round(clamp(c, 0, 1) * 255).toString(16).padStart(2, "0")).join("")}`;
 }
 
 function modify(rgb: Rgb, name: string, amount: number): Rgb {

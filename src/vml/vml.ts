@@ -2,8 +2,8 @@ import { DocumentParser } from '../document-parser';
 import { convertLength, LengthUsage } from '../document/common';
 import { OpenXmlElementBase, DomType, OpenXmlElement } from '../document/dom';
 import xml from '../parser/xml-parser';
-import { clamp, strictInteger } from '../utils';
-import { arrowBase, arrowHead, DrawingGroup, GroupFrame, groupFrame, GroupPlace, integerPair, placeChild } from '../drawing/group';
+import { clamp } from '../utils';
+import { addArrowHead, DrawingGroup, GroupFrame, groupFrame, GroupPlace, integerPair, placeChild, strictInteger } from '../drawing/group';
 
 const vmlNamespace = "urn:schemas-microsoft-com:vml";
 
@@ -70,7 +70,7 @@ export class VmlElement extends OpenXmlElementBase {
 	}
 }
 
-export function parseVmlElement(elem: Element, parser: DocumentParser, watermarkAllowed = false, frame: GroupFrame = null): OpenXmlElement {
+export function parseVmlElement(elem: Element, parser: DocumentParser, frame: GroupFrame = null): OpenXmlElement {
 	if (elem.namespaceURI != vmlNamespace)
 		return null;
 
@@ -111,7 +111,6 @@ export function parseVmlElement(elem: Element, parser: DocumentParser, watermark
 
 	let stroke: Element = null, fill: Element = null, textBox: Element = null, imageData: Element = null;
 	let hasTextPath = false;
-	const innerMarks: VmlSvgPart[] = [];
 
 	for (const el of xml.elements(elem)) {
 		switch (el.localName) {
@@ -124,16 +123,11 @@ export function parseVmlElement(elem: Element, parser: DocumentParser, watermark
 			case "wrap":
 				result.wrapType = xml.attr(el, "type");
 				break;
-
-			default:
-				if (el.namespaceURI == vmlNamespace && !modifierTags.has(el.localName))
-					innerMarks.push(markPart("vml-element"));
-				break;
 		}
 	}
 
 	if (hasTextPath)
-		return notDrawn(watermarkAllowed && elem.localName == "shape" ? "watermark" : "vml-element");
+		return notDrawn("vml-element");
 
 	const style = parseVmlStyle(xml.attr(elem, "style"));
 	result.box = parseBox(style);
@@ -191,8 +185,6 @@ export function parseVmlElement(elem: Element, parser: DocumentParser, watermark
 					}
 				} else if (!textBox) {
 					return notDrawn(pathText ? "vml-path" : "vml-shape");
-				} else if (pathText) {
-					innerMarks.push(markPart("vml-path"));
 				}
 				break;
 			}
@@ -200,9 +192,7 @@ export function parseVmlElement(elem: Element, parser: DocumentParser, watermark
 	}
 
 	if (elem.localName != "line" && arrowTypes(stroke).some(type => type != "none"))
-		innerMarks.push(markPart("partial"));
-
-	result.parts.push(...innerMarks);
+		result.parts.push(markPart("partial"));
 
 	const flip = style.get("flip") ?? "";
 	const flipX = flip.includes("x") != !!frame?.flipH;
@@ -213,12 +203,7 @@ export function parseVmlElement(elem: Element, parser: DocumentParser, watermark
 	if (textBox) {
 		result.textBox = parseTextBox(textBox, style.get("v-text-anchor"));
 		const content = xml.element(textBox, "txbxContent");
-		const children = content ? parser.parseTextBoxContent(content) : [];
-
-		if (!children)
-			return notDrawn("depth");
-
-		result.children.push(...children);
+		content && result.children.push(...parser.parseTextBoxContent(content));
 	}
 
 	return result;
@@ -241,10 +226,7 @@ function parseVmlGroup(elem: Element, parser: DocumentParser, frame: GroupFrame)
 	if (!childFrame || frame && !mapped)
 		return notDrawn("group-child");
 
-	const children = parser.nested(() => xml.elements(elem).map(child => parseVmlElement(child, parser, false, childFrame)).filter(Boolean));
-
-	if (!children)
-		return notDrawn("depth");
+	const children = parser.nested(() => xml.elements(elem).map(child => parseVmlElement(child, parser, childFrame)).filter(Boolean));
 
 	const group = new DrawingGroup();
 	group.width = width;
@@ -289,19 +271,22 @@ function lineHeads(stroke: Element, line: Record<string, string>, box: VmlBox, p
 	const corner = (x: string, y: string) => [x == "0" ? 0 : box.width, y == "0" ? 0 : box.height];
 	const ends = [corner(line.x1, line.y1), corner(line.x2, line.y2)];
 
-	return arrowTypes(stroke).flatMap((type, i): VmlSvgPart[] => {
-		if (type == "none" || !paint.stroke)
-			return [];
+	const parts: VmlSvgPart[] = [];
 
-		if (!drawnArrows.has(type))
-			return [markPart("partial")];
+	arrowTypes(stroke).forEach((type, i) => {
+		if (type == "none" || !paint.stroke)
+			return;
+
+		if (!drawnArrows.has(type)) {
+			parts.push(markPart("partial"));
+			return;
+		}
 
 		const scale = (name: string) => arrowScale[(xml.attr(stroke, `${["start", "end"][i]}arrow${name}`) ?? "").trim().toLowerCase()] ?? 3;
-		const d = arrowHead(ends[i], ends[1 - i], paint.strokeWidth, scale("width"), scale("length"));
-		const [bx, by] = arrowBase(ends[i], ends[1 - i], paint.strokeWidth, scale("length"));
-		Object.assign(line, i ? { x2: formatNumber(bx), y2: formatNumber(by) } : { x1: formatNumber(bx), y1: formatNumber(by) });
-		return [{ tagName: "path", attrs: { d, fill: paint.stroke, stroke: "none" } }];
+		addArrowHead(parts, line, ends, i, paint.strokeWidth, scale("width"), scale("length"), { fill: paint.stroke, stroke: "none" });
 	});
+
+	return parts;
 }
 
 export function notDrawn(reason: string): VmlElement {
@@ -327,25 +312,6 @@ function readShapeType(elem: Element): VmlShapeType {
 }
 
 const lengthPattern = /^[+-]?(\d+\.?\d*|\.\d+)(pt|px|in|cm|mm|pc|pi)?$/;
-const styleRules = new Map<string, RegExp>([
-	["position", /^(absolute|relative|static)$/],
-	["left", lengthPattern],
-	["top", lengthPattern],
-	["margin-left", lengthPattern],
-	["margin-top", lengthPattern],
-	["width", lengthPattern],
-	["height", lengthPattern],
-	["z-index", /^-?\d{1,10}$/],
-	["rotation", /^-?\d+(\.\d+)?$/],
-	["flip", /^(x|y|x y|y x)$/],
-	["visibility", /^(hidden|visible|inherit)$/],
-	["mso-position-horizontal", /^(absolute|left|center|right|inside|outside|top|bottom)$/],
-	["mso-position-vertical", /^(absolute|left|center|right|inside|outside|top|bottom)$/],
-	["mso-position-horizontal-relative", /^(page|margin|text|char|(left|right|inner|outer)-margin-area)$/],
-	["mso-position-vertical-relative", /^(page|margin|text|line|(top|bottom|inner|outer)-margin-area)$/],
-	["v-text-anchor", /^(top|middle|bottom)(-center|-baseline|-center-baseline)?$/],
-]);
-
 export function parseVmlStyle(text: string): Map<string, string> {
 	const result = new Map<string, string>();
 
@@ -355,10 +321,9 @@ export function parseVmlStyle(text: string): Map<string, string> {
 			result.set(item.substring(0, colon).trim().toLowerCase(), item.substring(colon + 1).trim().toLowerCase());
 	}
 
-	for (const [key, value] of result) {
-		if (!styleRules.get(key)?.test(value))
-			result.delete(key);
-	}
+	// each reader checks its own value; flip is the only one passed on as written
+	if (result.has("flip") && !/^(x|y|x y|y x)$/.test(result.get("flip")))
+		result.delete("flip");
 
 	return result;
 }
@@ -445,17 +410,14 @@ function arcSize(value: string): number {
 }
 
 function parseViewBox(coordsize: string, coordorigin: string): string {
-	const integer = (part: string) => {
-		const value = strictInteger(part);
-		return Number.isNaN(value) ? null : value;
-	};
+	const integer = (part: string) => /^-?\d+$/.test(part?.trim() ?? "") ? parseInt(part) : null;
 	const size = (coordsize ?? "1000,1000").split(",").map(integer);
 	const origin = (coordorigin ?? "").split(",").map(integer);
 
 	return [origin[0] ?? 0, origin[1] ?? 0, size[0] > 0 ? size[0] : 1, size[1] > 0 ? size[1] : 1].join(" ");
 }
 
-const textAnchor: Record<string, string> = { top: "flex-start", middle: "center", bottom: "flex-end" };
+const textAnchor = new Map([["top", "flex-start"], ["middle", "center"], ["bottom", "flex-end"]]);
 const defaultInset = ["7.2pt", "3.6pt", "7.2pt", "3.6pt"];
 
 function parseTextBox(elem: Element, anchor: string): VmlTextBox {
@@ -467,7 +429,7 @@ function parseTextBox(elem: Element, anchor: string): VmlTextBox {
 
 	return {
 		padding: [top, right, bottom, left],
-		justify: textAnchor[anchor?.split("-")[0]] ?? "flex-start",
+		justify: textAnchor.get(anchor?.split("-")[0]) ?? "flex-start",
 	};
 }
 
@@ -479,7 +441,7 @@ export function vmlBool(value: string, defaultValue: boolean): boolean {
 	return trueValues.has(key) ? true : falseValues.has(key) ? false : defaultValue;
 }
 
-export const namedColors = new Set(("aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet " +
+const namedColors = new Set(("aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet " +
 	"brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan " +
 	"darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred " +
 	"darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue " +
@@ -605,13 +567,10 @@ const pathGroupSize: Record<string, number> = { m: 2, l: 2, r: 2, t: 2, c: 6, v:
 const svgCommands: Record<string, [string, string]> = {
 	m: ["M", "L"], t: ["m", "l"], l: ["L", "L"], r: ["l", "l"], c: ["C", "C"], v: ["c", "c"]
 };
-const maxPathTokens = 10000;
-const maxPathValue = 2 ** 31;
 
 export function parseVmlPath(text: string): VmlSubpath[] {
 	const segments: { command: string, values: number[] }[] = [];
 	const token = /(-?\d+)|(,)|(\s+)/y;
-	let tokens = 0;
 	let afterComma = false;
 	let started = false;
 
@@ -624,9 +583,6 @@ export function parseVmlPath(text: string): VmlSubpath[] {
 	};
 
 	for (let i = 0; i < text.length;) {
-		if (++tokens > maxPathTokens)
-			return null;
-
 		const command = pathCommands.find(c => text.startsWith(c, i));
 
 		if (command) {
@@ -646,10 +602,7 @@ export function parseVmlPath(text: string): VmlSubpath[] {
 		const values = segments[segments.length - 1]?.values;
 
 		if (match[1]) {
-			const value = parseInt(match[1]);
-			if (Math.abs(value) > maxPathValue)
-				return null;
-			values.push(value);
+			values.push(parseInt(match[1]));
 			afterComma = false;
 			started = true;
 		} else if (match[2]) {
@@ -657,8 +610,6 @@ export function parseVmlPath(text: string): VmlSubpath[] {
 				values.push(0);
 			afterComma = true;
 			started = true;
-		} else {
-			tokens--;
 		}
 	}
 

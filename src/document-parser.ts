@@ -133,9 +133,6 @@ export class DocumentParser {
 	}
 
 	nested<T>(parse: () => T): T {
-		if (this.drawingDepth >= 16)
-			return null;
-
 		this.drawingDepth++;
 
 		try {
@@ -762,7 +759,7 @@ export class DocumentParser {
 					break;
 
 				case "pict":
-					result.children.push(this.parseVmlPicture(c, c === child));
+					result.children.push(this.parseVmlPicture(c));
 					break;
 
 				case "rPr":
@@ -834,11 +831,11 @@ export class DocumentParser {
 		});
 	}
 
-	parseVmlPicture(elem: Element, watermarkAllowed = false): OpenXmlElement {
+	parseVmlPicture(elem: Element): OpenXmlElement {
 		const result = { type: DomType.VmlPicture, children: [] };
 
 		for (const el of xml.elements(elem)) {
-			const child = parseVmlElement(el, this, watermarkAllowed);
+			const child = parseVmlElement(el, this);
 			child && result.children.push(child);
 		}
 
@@ -850,11 +847,17 @@ export class DocumentParser {
 			return elem;
 
 		const choice = xml.element(elem, "Choice");
+		const fallback = xml.element(elem, "Fallback");
 
-		if (choice && canDrawChoice(choice))
+		if (choice && canDrawChoice(choice)) {
+			// Word writes a shape type only in the first Fallback that uses it, so later Fallbacks still need it
+			for (const shapeType of fallback ? Array.from(fallback.getElementsByTagNameNS("*", "shapetype")) : [])
+				parseVmlElement(shapeType, this);
+
 			return choice.firstElementChild;
+		}
 
-		return xml.element(elem, "Fallback")?.firstElementChild;
+		return fallback?.firstElementChild;
 	}
 
 	parseDrawing(node: Element): OpenXmlElement {
@@ -884,9 +887,7 @@ export class DocumentParser {
 
 		let wrapType: "wrapTopAndBottom" | "wrapNone" | null = null;
 		let simplePos = xml.boolAttr(node, "simplePos");
-		let behindDoc = xml.boolAttr(node, "behindDoc");
-
-		let posX = { align: "left" };
+		let align = "left";
 
 		for (var n of xml.elements(node)) {
 			switch (n.localName) {
@@ -900,7 +901,7 @@ export class DocumentParser {
 						var alignNode = xml.element(n, "align");
 
 						if (alignNode)
-							posX.align = alignNode.textContent;
+							align = alignNode.textContent;
 					}
 					break;
 
@@ -927,13 +928,13 @@ export class DocumentParser {
 		if (wrapType == "wrapTopAndBottom") {
 			result.cssStyle['display'] = 'block';
 
-			if (posX.align) {
-				result.cssStyle['text-align'] = posX.align;
+			if (align) {
+				result.cssStyle['text-align'] = align;
 				result.cssStyle['width'] = "100%";
 			}
 		}
-		else if (isAnchor && (posX.align == 'left' || posX.align == 'right')) {
-			result.cssStyle["float"] = posX.align;
+		else if (isAnchor && (align == 'left' || align == 'right')) {
+			result.cssStyle["float"] = align;
 		}
 
 		return result;
@@ -1504,16 +1505,14 @@ export class DocumentParser {
 
 		if (line) {
 			style["--docx-run-line-height"] = lineRule == "atLeast" ? "normal" : "initial";
-			if (lineRule == "auto") {
-				// a unit (or a zero) is not a valid multiple of 240ths and would collapse the lines
-				const multiple = Number(line) / 240;
+			switch (lineRule) {
+				case "auto":
+					style["line-height"] = `${(Number(line) / 240).toFixed(2)}`;
+					break;
 
-				if (multiple >= 0.005)
-					style["line-height"] = multiple.toFixed(2);
-			} else {
-				const length = convertLength(line, LengthUsage.Dxa);
-
-				style["line-height"] = style["min-height"] = length;
+				default:
+					style["line-height"] = style["min-height"] = convertLength(line, LengthUsage.Dxa);
+					break;
 			}
 		}
 	}
@@ -1813,7 +1812,7 @@ function wrapPageFields(children: OpenXmlElement[]) {
 			const field = pageFieldResult(f.instruction, between);
 			field && children.splice(f.separate + 1, between.length, field);
 		} else if (between.length == 0) {
-			// a result held in something else, such as a tracked change, keeps showing as it is
+			// the result text sits in the separate run, which renderRun hides; show it in a run of its own
 			const run: WmlRun = { ...f.run, fieldRun: false, children: [<WmlText>{ type: DomType.Text, text: f.savedText }] };
 			const field = pageFieldResult(f.instruction, [run]);
 			field && children.splice(f.end, 0, field);

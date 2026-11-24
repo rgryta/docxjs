@@ -43,6 +43,11 @@ describe("DrawingML shapes", function () {
   const alternate = (choice, fallback) => `<mc:AlternateContent>${choice}${fallback == null ? "" : `<mc:Fallback>${fallback}</mc:Fallback>`}</mc:AlternateContent>`;
   const ovalFallback = '<w:pict><v:oval style="width:20pt;height:10pt"/></w:pict>';
   const rectChoice = (requires, extra = "") => `<mc:Choice Requires="${requires}"${extra}>${inline(20, 10, shapeGraphic(wsp()))}</mc:Choice>`;
+  const vmlTextBox = text => `<v:shape type="#_x0000_t202" style="width:100pt;height:20pt"><v:textbox><w:txbxContent>${textParas(text)}</w:txbxContent></v:textbox></v:shape>`;
+  // a two-column table with the content in the right cell
+  const cellTable = content => '<w:tbl><w:tblGrid><w:gridCol w:w="2280"/><w:gridCol w:w="2280"/></w:tblGrid><w:tr>' +
+    `<w:tc><w:tcPr><w:tcW w:w="2280" w:type="dxa"/></w:tcPr>${textParas("left cell")}</w:tc>` +
+    `<w:tc><w:tcPr><w:tcW w:w="2280" w:type="dxa"/></w:tcPr><w:p>${content}</w:p></w:tc></w:tr></w:tbl>`;
   const nestedBoxes = depth => depth == 0 ? textParas("innermost")
     : `<w:p><w:r>${inline(200, 20, shapeGraphic(wsp({ w: 200, h: 20, text: nestedBoxes(depth - 1) })))}</w:r></w:p>`;
 
@@ -92,13 +97,18 @@ describe("DrawingML shapes", function () {
     para("case-choice-wordart", run(alternate(`<mc:Choice Requires="wps">${inline(20, 10, shapeGraphic(wsp({
       bodyPr: '<wps:bodyPr><a:prstTxWarp prst="textArchUp"><a:avLst/></a:prstTxWarp></wps:bodyPr>',
     })))}</mc:Choice>`, ovalFallback))),
+    para("case-choice-arrow", run(alternate(`<mc:Choice Requires="wps">${inline(20, 10, shapeGraphic(wsp({ geom: "line", spPr: '<a:ln><a:tailEnd type="triangle"/></a:ln>' })))}</mc:Choice>`, ovalFallback))),
     para("case-marks",
       run(inline(20, 10, shapeGraphic(custGeom))),
       run(alternate(`<mc:Choice Requires="wps">${inline(20, 10, shapeGraphic(custGeom))}</mc:Choice>`)),
       run(alternate('<mc:Choice Requires="wps"/>', `${ovalFallback}${ovalFallback}`))),
-    para("case-depth-16", run(inline(200, 20, shapeGraphic(wsp({ w: 200, h: 20, text: nestedBoxes(15) }))))),
+    para("case-shapetype-first", run(alternate(`<mc:Choice Requires="wps">${inline(100, 20, shapeGraphic(wsp({ w: 100, h: 20, text: textParas("First box") })))}</mc:Choice>`,
+      `<w:pict><v:shapetype id="_x0000_t202" coordsize="21600,21600" path="m,l,21600r21600,l21600,xe"/>${vmlTextBox("First box")}</w:pict>`))),
+    para("case-shapetype-second", run(alternate(`<mc:Choice Requires="wps">${inline(100, 20, shapeGraphic(wsp({ w: 100, h: 20, text: textParas("Second box"), bodyPr: '<wps:bodyPr vert="vert270"/>' })))}</mc:Choice>`,
+      `<w:pict>${vmlTextBox("Second box")}</w:pict>`))),
     para("case-depth-17", run(inline(200, 20, shapeGraphic(wsp({ w: 200, h: 20, text: nestedBoxes(16) }))))),
     para("case-unsafe", run(anchor({ h: posH("page", "<wp:posOffset>5px</wp:posOffset>"), v: posV("paragraph", offset(0)) }, shapeGraphic(wsp())))),
+    cellTable(run(anchor({ h: posH("column", offset(0)), v: posV("paragraph", offset(0)) }, shapeGraphic(wsp())))),
     ...Array.from({ length: 30 }, (_, i) => para(`filler-${i}`)),
   ].join("\n");
 
@@ -312,6 +322,7 @@ ${content}
     expect(branch("case-choice-local")).toBe("choice");
     expect(branch("case-choice-two")).toBe("fallback");
     expect(branch("case-choice-wordart")).toBe("fallback");
+    expect(paragraph("case-choice-arrow").querySelector("svg line")).not.toBeNull();
     expect(reasons(paragraph("case-choice-empty"))).toEqual([]);
   });
 
@@ -320,10 +331,19 @@ ${content}
     expect(paragraph("case-marks").querySelectorAll("svg ellipse").length).toBe(1);
   });
 
-  it("draws text boxes nested 16 deep and marks the 17th", () => {
-    expect(reasons(paragraph("case-depth-16"))).toEqual([]);
-    expect(Array.from(paragraph("case-depth-16").querySelectorAll("p")).some(p => p.textContent == "innermost")).toBeTrue();
-    expect(reasons(paragraph("case-depth-17"))).toEqual(["depth"]);
+  it("keeps the shape type of a Fallback whose Choice is drawn for a later Fallback", () => {
+    expect(reasons(paragraph("case-shapetype-second"))).toEqual([]);
+    expect(textOf("case-shapetype-second", "Second box")).toBeTruthy();
+  });
+
+  it("places a no-wrap column-relative shape in a table cell from the cell", () => {
+    const cell = container.querySelectorAll("article td")[1];
+    expectNear(rect(cell.querySelector("svg").parentElement).left, rect(cell.querySelector("p")).left);
+  });
+
+  it("draws text boxes nested 17 deep", () => {
+    expect(reasons(paragraph("case-depth-17"))).toEqual([]);
+    expect(Array.from(paragraph("case-depth-17").querySelectorAll("p")).some(p => p.textContent == "innermost")).toBeTrue();
   });
 
   describe("in a two-column section", () => {

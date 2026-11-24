@@ -219,6 +219,44 @@ describe("Page fields and section breaks", function () {
     expect(shownText(div, "FOOTER")).toEqual(["1", "2", "3", "5", "0", "1"]);
   });
 
+  it("starts numbering at the first section's pgNumType start when that section is continuous", async () => {
+    div = await render({
+      body: para("A") + pageBreak + para("B"),
+      sectPr: `${FOOTER}<w:type w:val="continuous"/><w:pgNumType w:start="5"/>${PAGE}`,
+      parts: [pageFooter()],
+    });
+
+    expect(docx.paginate(div)).toBe(true);
+    expect(shownText(div, "FOOTER")).toEqual(["5", "6"]);
+  });
+
+  it("keeps the page after a page break that ends the body", async () => {
+    div = await render({
+      body: para("A") + pageBreak,
+      sectPr: FOOTER + PAGE,
+      parts: [part("rIdF", [`<w:p>${field("PAGE", "9")}${run(" of ")}${field("NUMPAGES", "9")}</w:p>`])],
+    }, { paginate: true });
+
+    expect(shownText(div, "FOOTER")).toEqual(["1 of 2", "2 of 2"]);
+  });
+
+  it("starts the page after a mid-body page break with the next paragraph", async () => {
+    div = await render({ body: para("A") + pageBreak + para("B") });
+
+    expect(pages(div).map(p => p.querySelector("article").firstElementChild.textContent)).toEqual(["A", "B"]);
+  });
+
+  it("writes letter page numbers past Z as doubled letters", async () => {
+    div = await render({
+      body: para("A") + pageBreak + para("B"),
+      sectPr: `${FOOTER}<w:pgNumType w:fmt="upperLetter" w:start="26"/>${PAGE}`,
+      parts: [pageFooter()],
+    });
+
+    expect(docx.paginate(div)).toBe(true);
+    expect(shownText(div, "FOOTER")).toEqual(["Z", "AA"]);
+  });
+
   it("fills a paragraph-level simple PAGE field in a header", async () => {
     div = await render({
       body: para("A") + pageBreak + para("B"),

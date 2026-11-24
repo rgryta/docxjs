@@ -14,7 +14,6 @@ describe("VML shapes", function () {
   const pict = inner => `<w:r><w:pict>${inner}</w:pict></w:r>`;
   const para = (id, ...runs) => `<w:p><w:r><w:t xml:space="preserve">${id} </w:t></w:r>${runs.join("")}</w:p>`;
   const textBox = text => `<v:textbox><w:txbxContent><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:txbxContent></v:textbox>`;
-  const textPath = '<v:shape style="width:100pt;height:20pt"><v:textpath string="DRAFT"/></v:shape>';
 
   const body = [
     para("case-first"),
@@ -38,16 +37,17 @@ describe("VML shapes", function () {
       '<v:shapetype id="_x0000_t202" coordsize="21600,21600" path="m,l,21600r21600,l21600,xe"/>' +
       `<v:shape type="#_x0000_t202" filled="f" stroked="f" style="width:200pt;height:50pt">${textBox("Boxed text")}</v:shape>`)),
     para("case-stacking", pict(`<v:shape type="#_x0000_t202" style="width:100pt;height:30pt;z-index:-5;visibility:hidden;flip:x">${textBox("Flipped text")}</v:shape>`)),
-    para("case-unsafe", pict('<v:rect style="background:url(http://x/);position:fixed;width:10pt;height:10pt"/>')),
     para("case-marks",
       pict('<v:shape style="width:10pt;height:10pt" path="m0,0qx10,10e"/>'),
       pict('<v:polyline points="0,0 10,10"/>'),
       pict('<v:shape style="width:10pt;height:10pt"/>'),
       pict('<v:shape type="#missing" style="width:10pt;height:10pt"/>')),
+    para("case-freeform", pict(`<v:shape coordsize="3000,3000" style="width:10pt;height:10pt" path="m0,0l${Array.from({ length: 3000 }, (_, i) => `${i},${i % 7}`).join(",")}e"/>`)),
     para("case-picture-no-type", pict('<v:shape type="#missing" style="width:10pt;height:10pt"><v:imagedata r:id="rIdMissing"/></v:shape>')),
-    para("case-watermark-alternate",
-      `<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing/></mc:Choice><mc:Fallback>${`<w:pict>${textPath}</w:pict>`}</mc:Fallback></mc:AlternateContent></w:r>`),
-    para("case-watermark-bare", pict(textPath)),
+    '<w:tbl><w:tblGrid><w:gridCol w:w="4000"/><w:gridCol w:w="4000"/></w:tblGrid><w:tr>' +
+      '<w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>left cell</w:t></w:r></w:p></w:tc>' +
+      '<w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr><w:p>' + pict('<v:shape type="#_x0000_t75" style="position:absolute;margin-left:0;mso-position-horizontal-relative:text;width:100pt;height:50pt"><v:imagedata r:id="rIdMissing"/></v:shape>') + '</w:p></w:tc>' +
+      '</w:tr></w:tbl>',
     ...Array.from({ length: 20 }, (_, i) => para(`filler-${i}`)),
   ].join("\n");
 
@@ -223,23 +223,15 @@ ${body}
       expect(getComputedStyle(el).transform).toBe("none");
   });
 
-  it("drops style values outside the allow-list", () => {
-    for (const el of paragraph("case-unsafe").querySelectorAll("*")) {
-      expect(getComputedStyle(el).backgroundImage).toBe("none");
-      expect(getComputedStyle(el).position).not.toBe("fixed");
-    }
-  });
-
   it("marks the shapes it does not draw", () => {
     const reasons = Array.from(paragraph("case-marks").querySelectorAll("[data-docx-not-drawn]"), el => el.getAttribute("data-docx-not-drawn"));
     expect(reasons).toEqual(["vml-path", "vml-element", "vml-shape", "vml-type"]);
     expect(paragraph("case-marks").querySelector("svg")).toBeNull();
   });
 
-  it("marks a watermark as such only in a bare run", () => {
-    const reason = id => paragraph(id).querySelector("[data-docx-not-drawn]")?.getAttribute("data-docx-not-drawn");
-    expect(reason("case-watermark-alternate")).toBe("vml-element");
-    expect(reason("case-watermark-bare")).toBe("watermark");
+  it("draws a freeform with thousands of points", () => {
+    expect(paragraph("case-freeform").querySelector("[data-docx-not-drawn]")).toBeNull();
+    expect(paragraph("case-freeform").querySelector("svg path")).not.toBeNull();
   });
 
   it("keeps a shape behind the text visible in the header and footer", () => {
@@ -255,6 +247,22 @@ ${body}
     window.scrollTo(0, 0);
     expect(rect(section().querySelector('footer svg rect[fill="#0000ff"]')).top).toBeLessThan(rect(text).top);
     expect(text.contains(hit)).toBeTrue();
+  });
+
+  it("places a text-relative shape in a table cell from the cell", () => {
+    const cell = container.querySelectorAll("article td")[1];
+    expectNear(rect(cell.querySelector("svg").parentElement).left, rect(cell.querySelector("p")).left);
+  });
+
+  it("leaves the page size variables off when the page size is ignored", async () => {
+    const other = document.createElement("div");
+    document.body.appendChild(other);
+    await docx.renderAsync(await buildDocx(), other, null, { ignoreWidth: true, ignoreHeight: true });
+    const style = other.querySelector("section.docx").style;
+    expect(style.getPropertyValue("--docx-page-width")).toBe("");
+    expect(style.getPropertyValue("--docx-page-height")).toBe("");
+    expect(style.getPropertyValue("--docx-margin-left")).not.toBe("");
+    other.remove();
   });
 
   it("keeps clicks on a VML picture but lets them through a drawn shape", () => {

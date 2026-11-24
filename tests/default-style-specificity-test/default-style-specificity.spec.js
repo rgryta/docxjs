@@ -8,11 +8,13 @@
 <w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="160"/></w:pPr></w:pPrDefault></w:docDefaults>
 <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:rPr><w:sz w:val="40"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:color w:val="00AA00"/><w:sz w:val="18"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/></w:style>
 <w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:tblPr><w:tblCellMar><w:left w:w="216" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>
 </w:styles>`;
 
     const body = `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>heading</w:t></w:r></w:p>
 <w:p><w:r><w:t>plain</w:t></w:r></w:p>
+<w:p><w:pPr><w:pStyle w:val="Code"/></w:pPr><w:r><w:rPr><w:sz w:val="28"/></w:rPr><w:t>big</w:t><w:sym w:font="Symbol" w:char="F0B7"/><w:tab/></w:r></w:p>
 <w:tbl><w:tblPr><w:tblW w:w="5000" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`;
 
     async function build() {
@@ -65,6 +67,13 @@ ${body}
 
     it("keeps the document defaults' paragraph spacing over the base paragraph reset", () => {
       expect(parseFloat(getComputedStyle(span("plain").closest("p")).marginBottom) * 0.75).toBeCloseTo(8, 2);
+    });
+
+    it("lets the symbol and tab spans inside a run inherit the run's size", () => {
+      const code = Array.from(container.querySelectorAll("article p")).find(p => p.textContent.startsWith("big"));
+      const nested = Array.from(code.querySelectorAll("span span"));
+      expect(nested.length).toBe(2);
+      nested.forEach(s => expect(points(s)).toBeCloseTo(14, 2));
     });
 
     it("puts the default table style's cell margins on the cells", () => {

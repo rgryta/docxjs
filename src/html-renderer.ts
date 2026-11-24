@@ -24,7 +24,7 @@ import { BaseHeaderFooterPart, FooterPart } from './header-footer/parts';
 import { Part } from './common/part';
 import { dashPatterns, formatNumber, paintAttrs, VmlElement, VmlSvgPart, VmlTextBox } from './vml/vml';
 import { DmlAnchor, DmlAxis, DmlColor, DmlDrawing, DmlLineEnd, DmlShape, DmlStyleRef, formatColor, ResolvedColor, resolveColor } from './drawing/shape';
-import { arrowBase, arrowHead, DrawingGroup, GroupPlace } from './drawing/group';
+import { addArrowHead, DrawingGroup, GroupPlace } from './drawing/group';
 import { WmlCommentRangeStart, WmlCommentReference } from './comments/elements';
 import { cx, h, ns } from './html';
 
@@ -381,8 +381,8 @@ export class HtmlRenderer {
 			}
 
 			const pageVariables: Record<(typeof pageVariableNames)[number], string> = {
-				"--docx-page-width": props.pageSize?.width,
-				"--docx-page-height": props.pageSize?.height,
+				"--docx-page-width": this.options.ignoreWidth ? null : props.pageSize?.width,
+				"--docx-page-height": this.options.ignoreHeight ? null : props.pageSize?.height,
 				"--docx-margin-left": props.pageMargins?.left,
 				"--docx-margin-right": props.pageMargins?.right,
 				"--docx-margin-top": props.pageMargins?.top,
@@ -427,7 +427,7 @@ export class HtmlRenderer {
 			const pageElement = this.createPageElement(this.className, props, document.cssStyle);
 			const pageNumber = props?.pageNumber;
 
-			if (pageNumber?.start != null && prevProps != props && props.type != SectionType.Continuous && props.type != SectionType.NextColumn)
+			if (pageNumber?.start != null && prevProps != props && (!prevProps || props.type != SectionType.Continuous && props.type != SectionType.NextColumn))
 				pageElement.setAttribute("data-page-start", String(pageNumber.start));
 
 			if (pageNumber?.chapStyle || pageNumber?.format && pageNumber.format != "decimal")
@@ -642,6 +642,9 @@ export class HtmlRenderer {
 							elem.children.push(newRun);
 							breakRun.children = runChildren.slice(rBreakIndex);
 						}
+					} else if (elem === elements[elements.length - 1]) {
+						// a break that ends the body still makes a page; elsewhere the mark stays with the break (Word 2013+)
+						current.elements.push({ ...elem, children: [] });
 					}
 				}
 			}
@@ -697,9 +700,12 @@ export class HtmlRenderer {
 		if (this.options.hideWrapperOnPrint) {
 			wrapperStyle = `@media not print { ${wrapperStyle} }`;
 		}
+		// Word's size when neither the document defaults nor Normal set one
+		const fontSize = styles?.some(s => (s.id == null || (s.isDefault && s.target == "p"))
+			&& s.styles.some(x => x.target == "span" && x.values["font-size"])) ? "" : " font-size: 10pt;";
 		var styleText = `${wrapperStyle}
 .${c} { color: black; hyphens: ${this.document.settingsPart?.settings?.autoHyphenation ? "auto" : "manual"}; text-underline-position: from-font; }
-section.${c} { box-sizing: border-box; display: flex; flex-flow: column nowrap; position: relative; overflow: hidden; }
+section.${c} { box-sizing: border-box; display: flex; flex-flow: column nowrap; position: relative; overflow: hidden;${fontSize} }
 section.${c}>article { margin-bottom: auto; z-index: 1; }
 section.${c}>header, section.${c}>footer { z-index: 0; }
 .${c} table { border-collapse: collapse; }
@@ -710,12 +716,6 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
 .${c} a { color: inherit; text-decoration: inherit; }
 .${c} svg { fill: transparent; }
 `;
-
-		const setsFontSize = styles?.some(s => (s.id == null || (s.isDefault && s.target == "p"))
-			&& s.styles.some(x => x.target == "span" && x.values["font-size"]));
-
-		if (!setsFontSize)
-			styleText += `section.${c} { font-size: 10pt; }\n`; // Word's size when no default sets one
 
 		if (this.options.renderComments) {
 			styleText += `
@@ -881,22 +881,22 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
 
 			for (const subStyle of subStyles) {
 				//TODO temporary disable modificators until test it well
-				var selector = `${style.target ?? ''}.${style.cssName}`; //${subStyle.mod ?? ''}
-				const subTarget = style.target != subStyle.target ? ` ${subStyle.target}` : '';
+				var selector = `${style.target ?? ''}.${style.cssName}`; //${subStyle.mod ?? ''} 
 
-				// document defaults have no target; their run values sit below every style, their paragraph values still beat the base `p` reset
-				if (style.target == null && subStyle.target != "p")
-					selector = `:where(${selector})`;
+				// Document defaults (docDefaults) for runs go on the root, so a run inherits
+				// them only where its paragraph style sets nothing, as in Word. On every span
+				// they would beat the font and size the span inherits from its paragraph style.
+				const isRunDefaults = style.target == null && style.id == null && subStyle.target == "span";
 
-				selector += subTarget;
+				if (style.target != subStyle.target && !isRunDefaults)
+					selector += ` ${subStyle.target}`;
 
-				// a default style's own values sit on its element; its run (or cell) values add no specificity, so any style beats them.
-				// Normal's run values also go on the paragraph, so its line box is sized from them.
-				if (defautStyles[style.target] == style) {
-					const own = !subTarget || style.target == "p" ? `.${this.className} ${style.target}, ` : "";
-					const sub = subTarget ? `:where(.${this.className}) ${style.target}${subTarget}, ` : "";
-					selector = own + sub + selector;
-				}
+				// a default table style's cell values add no specificity, so any table style beats them;
+				// the default paragraph style's run values sit on the paragraph and are inherited
+				if (defautStyles[style.target] == style)
+					selector = (style.target != subStyle.target && style.target != "p"
+						? `:where(.${this.className}) ${style.target} ${subStyle.target}, `
+						: `.${this.className} ${style.target}, `) + selector;
 
 				if (subStyle.target == "span" && (style.target == null || style.target == "p")) {
 					const font = Object.fromEntries(Object.entries(subStyle.values).filter(([key]) =>
@@ -1598,7 +1598,7 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
 			if (spec === null || spec === undefined && !fromRef)
 				return null;
 
-			const color = fromRef ? refColor : resolveColor(spec, theme, refColor);
+			const color = fromRef ? refColor : resolveColor(spec, theme);
 			partial ||= !color;
 			return color;
 		};
@@ -1642,12 +1642,9 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
 					return;
 				}
 
-				const d = arrowHead(ends[i], ends[1 - i], paint.strokeWidth, headScale[end.width] ?? 3, headScale[end.length] ?? 3);
-				const [bx, by] = arrowBase(ends[i], ends[1 - i], paint.strokeWidth, headScale[end.length] ?? 3);
-				Object.assign(parts[0].attrs, i ? { x2: formatNumber(bx), y2: formatNumber(by) } : { x1: formatNumber(bx), y1: formatNumber(by) });
-				const head: Record<string, string> = { d, fill: paint.stroke, stroke: "none" };
+				const head: Record<string, string> = { fill: paint.stroke, stroke: "none" };
 				if (stroke.alpha < 1) head["fill-opacity"] = formatNumber(stroke.alpha);
-				parts.push({ tagName: "path", attrs: head });
+				addArrowHead(parts, parts[0].attrs, ends, i, paint.strokeWidth, headScale[end.width] ?? 3, headScale[end.length] ?? 3, head);
 			});
 		}
 
@@ -1695,8 +1692,10 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
 		if (!floating)
 			return;
 
-		const left = anchorEdge(anchor.h, horizontalFrames, width);
-		const hStatic = staticOffset(anchor.h, horizontalFrames);
+		// a table cell is not positioned, so a column-relative shape in one is offset from its place in the cell
+		const h = this.currentCellPosition && anchor.h.relative == "column" ? { ...anchor.h, relative: undefined } : anchor.h;
+		const left = anchorEdge(h, horizontalFrames, width);
+		const hStatic = staticOffset(h, horizontalFrames);
 
 		if (float) {
 			set("float", float.side);
@@ -1773,7 +1772,9 @@ section.${c}>header, section.${c}>footer { z-index: 0; }
 			set("margin-top", pt(box.y));
 		} else if (box.position == "absolute") {
 			set("position", "absolute");
-			const left = vmlEdge(vmlHorizontalFrames, box.hRelative ?? "text", box.hAlign, box.x, box.width);
+			const hRelative = box.hRelative ?? "text";
+			// a table cell is not positioned, so a text-relative shape keeps its place in the cell
+			const left = this.currentCellPosition && hRelative == "text" ? null : vmlEdge(vmlHorizontalFrames, hRelative, box.hAlign, box.x, box.width);
 			const top = vmlEdge(vmlVerticalFrames, box.vRelative, box.vAlign, box.y, box.height);
 
 			if (left == null)
