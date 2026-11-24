@@ -1,3 +1,4 @@
+import type { GroupPlace } from '../drawing/group';
 export enum DomType {
     Document = "document",
     Paragraph = "paragraph",
@@ -53,6 +54,8 @@ export enum DomType {
 	MmlBar = "mmlBar",
 	MmlGroupChar = "mmlGroupChar",
 	VmlElement = "vmlElement",
+	Shape = "shape",
+	Group = "group",
 	Inserted = "inserted",
 	Deleted = "deleted",
 	DeletedText = "deletedText",
@@ -147,6 +150,7 @@ export interface IDomImage extends OpenXmlElement {
     src: string;
     srcRect: number[];
     rotation: number;
+    place?: GroupPlace;
 }
 
 export interface WmlTableColumn {
