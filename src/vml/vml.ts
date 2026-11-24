@@ -2,8 +2,8 @@ import { DocumentParser } from '../document-parser';
 import { convertLength, LengthUsage } from '../document/common';
 import { OpenXmlElementBase, DomType, OpenXmlElement } from '../document/dom';
 import xml from '../parser/xml-parser';
-import { clamp, strictInteger } from '../utils';
-import { addArrowHead, DrawingGroup, GroupFrame, groupFrame, GroupPlace, integerPair, placeChild } from '../drawing/group';
+import { clamp } from '../utils';
+import { addArrowHead, DrawingGroup, GroupFrame, groupFrame, GroupPlace, integerPair, placeChild, strictInteger } from '../drawing/group';
 
 const vmlNamespace = "urn:schemas-microsoft-com:vml";
 
@@ -410,10 +410,7 @@ function arcSize(value: string): number {
 }
 
 function parseViewBox(coordsize: string, coordorigin: string): string {
-	const integer = (part: string) => {
-		const value = strictInteger(part);
-		return Number.isNaN(value) ? null : value;
-	};
+	const integer = (part: string) => /^-?\d+$/.test(part?.trim() ?? "") ? parseInt(part) : null;
 	const size = (coordsize ?? "1000,1000").split(",").map(integer);
 	const origin = (coordorigin ?? "").split(",").map(integer);
 

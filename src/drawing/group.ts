@@ -1,4 +1,3 @@
-import { strictInteger } from '../utils';
 import { DomType, OpenXmlElementBase } from '../document/dom';
 import type { VmlSvgPart } from '../vml/vml';
 
@@ -64,6 +63,11 @@ export function placeChild(frame: GroupFrame, [x, y, w, h]: number[], line: bool
 		width: w / cw * frame.width,
 		height: h / ch * frame.height,
 	};
+}
+
+/** A whole number written as digits (with an optional minus), or NaN for anything else. */
+export function strictInteger(text: string): number {
+	return /^-?\d+$/.test(text?.trim() ?? "") ? parseInt(text) : NaN;
 }
 
 export function integerPair(text: string, fallback: number[]): number[] {

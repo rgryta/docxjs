@@ -2,9 +2,9 @@ import { DocumentParser } from '../document-parser';
 import { DomType, IDomImage, OpenXmlElement, OpenXmlElementBase } from '../document/dom';
 import xml from '../parser/xml-parser';
 import { DmlTheme } from '../theme/theme';
-import { clamp, strictInteger } from '../utils';
+import { clamp } from '../utils';
 import { formatNumber, notDrawn, VmlTextBox } from '../vml/vml';
-import { DrawingGroup, GroupFrame, groupFrame, GroupPlace, placeChild } from './group';
+import { DrawingGroup, GroupFrame, groupFrame, GroupPlace, placeChild, strictInteger } from './group';
 
 const shapeNamespace = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
 const groupNamespace = "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup";
