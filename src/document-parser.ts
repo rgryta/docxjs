@@ -1808,7 +1808,7 @@ function wrapPageFields(children: OpenXmlElement[]) {
 			const field = pageFieldResult(f.instruction, between);
 			field && children.splice(f.separate + 1, between.length, field);
 		} else if (between.length == 0) {
-			// a result held in something else, such as a tracked change, keeps showing as it is
+			// the result text sits in the separate run, which renderRun hides; show it in a run of its own
 			const run: WmlRun = { ...f.run, fieldRun: false, children: [<WmlText>{ type: DomType.Text, text: f.savedText }] };
 			const field = pageFieldResult(f.instruction, [run]);
 			field && children.splice(f.end, 0, field);
