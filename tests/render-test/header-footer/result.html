@@ -7,9 +7,9 @@ section.docx>article { margin-bottom: auto; z-index: 1; }
 section.docx>footer { z-index: 1; }
 .docx table { border-collapse: collapse; }
 .docx table td, .docx table th { vertical-align: top; }
-.docx p { margin: 0pt; min-height: 1em; }
+.docx p { margin: 0pt; min-height: 1em; --docx-run-line-height: initial; }
 .docx p.docx-continued::before { content: none; }
-.docx span { white-space: pre-wrap; overflow-wrap: break-word; }
+.docx span { white-space: pre-wrap; overflow-wrap: break-word; line-height: var(--docx-run-line-height, inherit); }
 .docx a { color: inherit; text-decoration: inherit; }
 .docx svg { fill: transparent; }
 </style><!--docxjs document theme values--><style>.docx {
@@ -68,6 +68,7 @@ p.docx_a span {
 }
 p.docx_bodytext {
   margin-bottom: 7.00pt;
+  --docx-run-line-height: initial;
   line-height: 1.15;
 }
 p.docx_bodytext {
@@ -79,6 +80,7 @@ p.docx_bodytext span {
 }
 p.docx_list {
   margin-bottom: 7.00pt;
+  --docx-run-line-height: initial;
   line-height: 1.15;
 }
 p.docx_list {
