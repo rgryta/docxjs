@@ -522,9 +522,12 @@ export class HtmlRenderer {
 		if (this.options.hideWrapperOnPrint) {
 			wrapperStyle = `@media not print { ${wrapperStyle} }`;
 		}
+		// Word's size when neither the document defaults nor Normal set one
+		const fontSize = styles?.some(s => (s.id == null || (s.isDefault && s.target == "p"))
+			&& s.styles.some(x => x.target == "span" && x.values["font-size"])) ? "" : " font-size: 10pt;";
 		var styleText = `${wrapperStyle}
 .${c} { color: black; hyphens: auto; text-underline-position: from-font; }
-section.${c} { box-sizing: border-box; display: flex; flex-flow: column nowrap; position: relative; overflow: hidden; }
+section.${c} { box-sizing: border-box; display: flex; flex-flow: column nowrap; position: relative; overflow: hidden;${fontSize} }
 section.${c}>article { margin-bottom: auto; z-index: 1; }
 section.${c}>footer { z-index: 1; }
 .${c} table { border-collapse: collapse; }
@@ -534,12 +537,6 @@ section.${c}>footer { z-index: 1; }
 .${c} a { color: inherit; text-decoration: inherit; }
 .${c} svg { fill: transparent; }
 `;
-
-		const setsFontSize = styles?.some(s => (s.id == null || (s.isDefault && s.target == "p"))
-			&& s.styles.some(x => x.target == "span" && x.values["font-size"]));
-
-		if (!setsFontSize)
-			styleText += `section.${c} { font-size: 10pt; }\n`; // Word's size when no default sets one
 
 		if (this.options.renderComments) {
 			styleText += `
