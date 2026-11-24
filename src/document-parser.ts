@@ -13,7 +13,7 @@ import { parseBookmarkEnd, parseBookmarkStart } from './document/bookmarks';
 import { IDomStyle, IDomSubStyle } from './document/style';
 import { WmlFieldChar, WmlFieldSimple, WmlInstructionText } from './document/fields';
 import { convertLength, LengthUsage, LengthUsageType } from './document/common';
-import { parseVmlElement } from './vml/vml';
+import { parseVmlElement, VmlShapeType } from './vml/vml';
 import { WmlComment, WmlCommentRangeEnd, WmlCommentRangeStart, WmlCommentReference } from './comments/elements';
 import { encloseFontFamily } from './utils';
 
@@ -61,6 +61,7 @@ export interface DocumentParserOptions {
 
 export class DocumentParser {
 	options: DocumentParserOptions;
+	vmlShapeTypes = new Map<string, VmlShapeType>();
 
 	constructor(options?: Partial<DocumentParserOptions>) {
 		this.options = {
@@ -72,6 +73,7 @@ export class DocumentParser {
 
 	parseNotes(xmlDoc: Element, elemName: string, elemClass: any): any[] {
 		var result = [];
+		this.vmlShapeTypes.clear();
 
 		for (let el of xml.elements(xmlDoc, elemName)) {
 			const node = new elemClass();
@@ -86,6 +88,7 @@ export class DocumentParser {
 
 	parseComments(xmlDoc: Element): any[] {
 		var result = [];
+		this.vmlShapeTypes.clear();
 
 		for (let el of xml.elements(xmlDoc, "comment")) {
 			const item = new WmlComment();
@@ -104,6 +107,7 @@ export class DocumentParser {
 		var xbody = xml.element(xmlDoc, "body");
 		var background = xml.element(xmlDoc, "background");
 		var sectPr = xml.element(xbody, "sectPr");
+		this.vmlShapeTypes.clear();
 
 		return {
 			type: DomType.Document,
