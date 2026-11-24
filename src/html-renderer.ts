@@ -699,22 +699,22 @@ section.${c}>footer { z-index: 1; }
 
 			for (const subStyle of subStyles) {
 				//TODO temporary disable modificators until test it well
-				var selector = `${style.target ?? ''}.${style.cssName}`; //${subStyle.mod ?? ''}
-				const subTarget = style.target != subStyle.target ? ` ${subStyle.target}` : '';
+				var selector = `${style.target ?? ''}.${style.cssName}`; //${subStyle.mod ?? ''} 
 
-				// document defaults have no target; their run values sit below every style, their paragraph values still beat the base `p` reset
-				if (style.target == null && subStyle.target != "p")
-					selector = `:where(${selector})`;
+				// Document defaults (docDefaults) for runs go on the root, so a run inherits
+				// them only where its paragraph style sets nothing, as in Word. On every span
+				// they would beat the font and size the span inherits from its paragraph style.
+				const isRunDefaults = style.target == null && style.id == null && subStyle.target == "span";
 
-				selector += subTarget;
+				if (style.target != subStyle.target && !isRunDefaults)
+					selector += ` ${subStyle.target}`;
 
-				// a default style's own values sit on its element; its run (or cell) values add no specificity, so any style beats them.
-				// Normal's run values also go on the paragraph, so its line box is sized from them.
-				if (defautStyles[style.target] == style) {
-					const own = !subTarget || style.target == "p" ? `.${this.className} ${style.target}, ` : "";
-					const sub = subTarget ? `:where(.${this.className}) ${style.target}${subTarget}, ` : "";
-					selector = own + sub + selector;
-				}
+				// a default table style's cell values add no specificity, so any table style beats them;
+				// the default paragraph style's run values sit on the paragraph and are inherited
+				if (defautStyles[style.target] == style)
+					selector = (style.target != subStyle.target && style.target != "p"
+						? `:where(.${this.className}) ${style.target} ${subStyle.target}, `
+						: `.${this.className} ${style.target}, `) + selector;
 
 				styleText += this.styleToString(selector, subStyle.values);
 			}
