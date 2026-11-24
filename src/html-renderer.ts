@@ -505,6 +505,9 @@ export class HtmlRenderer {
 							elem.children.push(newRun);
 							breakRun.children = runChildren.slice(rBreakIndex);
 						}
+					} else if (elem === elements[elements.length - 1]) {
+						// a break that ends the body still makes a page; elsewhere the mark stays with the break (Word 2013+)
+						current.elements.push({ ...elem, children: [] });
 					}
 				}
 			}

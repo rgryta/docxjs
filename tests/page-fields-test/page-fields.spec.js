@@ -230,6 +230,22 @@ describe("Page fields and section breaks", function () {
     expect(shownText(div, "FOOTER")).toEqual(["5", "6"]);
   });
 
+  it("keeps the page after a page break that ends the body", async () => {
+    div = await render({
+      body: para("A") + pageBreak,
+      sectPr: FOOTER + PAGE,
+      parts: [part("rIdF", [`<w:p>${field("PAGE", "9")}${run(" of ")}${field("NUMPAGES", "9")}</w:p>`])],
+    }, { paginate: true });
+
+    expect(shownText(div, "FOOTER")).toEqual(["1 of 2", "2 of 2"]);
+  });
+
+  it("starts the page after a mid-body page break with the next paragraph", async () => {
+    div = await render({ body: para("A") + pageBreak + para("B") });
+
+    expect(pages(div).map(p => p.querySelector("article").firstElementChild.textContent)).toEqual(["A", "B"]);
+  });
+
   it("fills a paragraph-level simple PAGE field in a header", async () => {
     div = await render({
       body: para("A") + pageBreak + para("B"),
