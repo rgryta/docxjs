@@ -38,7 +38,8 @@ export class DrawingGroup extends OpenXmlElementBase {
 }
 
 export function groupFrame([ox, oy]: number[], [cw, ch]: number[], width: number, height: number, flipH: boolean, flipV: boolean): GroupFrame {
-	return [ox, oy, cw, ch, width, height].every(Number.isFinite) && cw > 0 && ch > 0 && width > 0 && height > 0
+	// a group of lines on one axis has no height or width
+	return [ox, oy, cw, ch, width, height].every(Number.isFinite) && Math.min(cw, ch, width, height) >= 0 && cw + ch > 0 && width + height > 0
 		? { ox, oy, cw, ch, width, height, flipH, flipV }
 		: null;
 }
@@ -49,7 +50,8 @@ export function placeChild(frame: GroupFrame, [x, y, w, h]: number[], line: bool
 
 	const left = frame.flipH ? frame.cw - (x - frame.ox) - w : x - frame.ox;
 	const top = frame.flipV ? frame.ch - (y - frame.oy) - h : y - frame.oy;
-	const percents = [left / frame.cw, top / frame.ch, w / frame.cw, h / frame.ch].map(v => v * 100);
+	const [cw, ch] = [frame.cw || 1, frame.ch || 1];
+	const percents = [left / cw, top / ch, w / cw, h / ch].map(v => v * 100);
 
 	if (!percents.every(v => Math.abs(v) <= maxPercent))
 		return null;
@@ -58,8 +60,8 @@ export function placeChild(frame: GroupFrame, [x, y, w, h]: number[], line: bool
 
 	return {
 		place: { left: l, top: t, width: pw, height: ph, rotation: frame.flipH != frame.flipV ? -rotation : rotation },
-		width: w / frame.cw * frame.width,
-		height: h / frame.ch * frame.height,
+		width: w / cw * frame.width,
+		height: h / ch * frame.height,
 	};
 }
 

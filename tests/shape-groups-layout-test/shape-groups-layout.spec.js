@@ -66,6 +66,9 @@ describe("Shape groups", function () {
       frame: xfrm({ x: 10 * PT, y: 10 * PT, w: 80 * PT, h: 0 }),
       spPr: `<a:ln w="${2 * PT}">${solid("FF0000")}<a:tailEnd type="triangle"/></a:ln>`,
     })))))),
+    para("case-flat-group", run(`<mc:AlternateContent><mc:Choice Requires="wpg">${inline(100, 0, groupGraphic(wgp(identity(100, 0),
+      ...[0, 60].map(x => shape({ geom: "straightConnector1", frame: xfrm({ x: x * PT, y: 0, w: 40 * PT, h: 0 }), spPr: `<a:ln w="${PT}">${solid("FF0000")}<a:tailEnd type="triangle"/></a:ln>` })))))}</mc:Choice>` +
+      `<mc:Fallback>${pict('<v:oval style="width:20pt;height:10pt"/>')}</mc:Fallback></mc:AlternateContent>`)),
     para("case-vml-arrow", run(pict('<v:line from="0,0" to="100pt,0" strokeweight="2pt"><v:stroke endarrow="block"/></v:line>'))),
     para("case-hidden", run(inline(200, 100, groupGraphic(wgp(identity(200, 100),
       box("123456", 0, 0, 50, 50),
@@ -180,6 +183,12 @@ ${body}
     expectNear(rect(head).right, rect(box).right);
     expectNear(rect(line).right, rect(head).left);
     expect(reasons(paragraph("case-arrow"))).toEqual([]);
+  });
+
+  it("draws a group with no height", () => {
+    expect(paragraph("case-flat-group").querySelectorAll("svg line").length).toBe(2);
+    expect(reasons(paragraph("case-flat-group"))).toEqual([]);
+    expect(paragraph("case-flat-group").innerHTML).not.toContain("NaN");
   });
 
   it("draws an arrowhead on a standalone VML line", () => {
