@@ -378,6 +378,20 @@
       expect(div.innerHTML).toBe(before);
     });
 
+    it("renders a page with an empty body", async () => {
+      const bodies = {
+        "a trailing page break": para("Text") + pageBreak,
+        "page break before the first paragraph": `<w:p><w:pPr><w:pageBreakBefore/></w:pPr>${run("Text")}</w:p>`,
+        "no paragraphs": "",
+      };
+
+      for (const [name, body] of Object.entries(bodies)) {
+        div?.remove();
+        div = await render({ body }, { paginate: true });
+        expect(pages(div).length).withContext(name).toBeGreaterThan(0);
+      }
+    });
+
     it("does not split a page under a header taller than the page", async () => {
       div = await render({
         body: paras(6),

@@ -93,6 +93,10 @@ export function splitPage(page: HTMLElement, className: string = "docx"): HTMLEl
 		...articles.flatMap(article => (Array.from(article.children) as HTMLElement[]).map(block => ({ block, article }))),
 		...children.filter(c => c.tagName === "OL" && c !== footnotes).map(block => ({ block, article: null as HTMLElement })),
 	];
+
+	if (!flow.length)
+		return null;
+
 	// Empty paragraphs (such as the one holding a page break) never start a page.
 	// the page also grows by the last block's bottom margin: margins do not collapse in the page's flex column
 	const last = flow[flow.length - 1].block;
