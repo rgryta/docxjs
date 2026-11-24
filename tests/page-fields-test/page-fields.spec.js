@@ -246,6 +246,17 @@ describe("Page fields and section breaks", function () {
     expect(pages(div).map(p => p.querySelector("article").firstElementChild.textContent)).toEqual(["A", "B"]);
   });
 
+  it("writes letter page numbers past Z as doubled letters", async () => {
+    div = await render({
+      body: para("A") + pageBreak + para("B"),
+      sectPr: `${FOOTER}<w:pgNumType w:fmt="upperLetter" w:start="26"/>${PAGE}`,
+      parts: [pageFooter()],
+    });
+
+    expect(docx.paginate(div)).toBe(true);
+    expect(shownText(div, "FOOTER")).toEqual(["Z", "AA"]);
+  });
+
   it("fills a paragraph-level simple PAGE field in a header", async () => {
     div = await render({
       body: para("A") + pageBreak + para("B"),
